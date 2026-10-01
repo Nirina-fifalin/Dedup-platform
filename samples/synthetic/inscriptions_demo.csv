@@ -1,0 +1,84 @@
+nom,prenom,email,telephone,sexe,formation,annee,_truth
+Rakotomalala,Marie,marie.rakotomalala@gmail.com,0323320419,F,IA,2026,0
+Marie,Rakotomalala,marie.rakotomalala@gmail.com,032 33 204 19,F,Data,2025,0
+Rasoa,Fanja,fanja.rasoa@yahoo.fr,034 86 857 02,F,Python,2024,1
+Rasoa,Fanja,fanja.rasoa@yahoo.fr,034 86 857 02,F,Data,2025,1
+Rasoa,Fanja,fanja.rasoa@yahoo.fr,034 86 857 02,F,Python,2024,1
+Rakoto,Naivo,naivo.rakoto@hotmail.com,032 88 348 13,M,IA,2026,2
+Rakoto,Naivo,naivo.rakoto@hotmail.com,032 88 348 13,M,Python,2024,2
+Naivo,Rakoto,naivo.rakoto@hotmail.com,032 88 348 13,M,Python,2024,2
+Rakotoarisoa,Fanja,fanja.rakotoarisoa@yahoo.fr,+261347606524,F,Excel,2024,3
+Fanja,Rakotoarisoa,fanja.rakotoarisoa@yahoo.fr,034 76 065 24,F,Python,2024,3
+Rabe,Tiana,tiana.rabe@gmail.com,0336872032,F,Excel,2024,4
+Rabe,Marie,marie.rabe@hotmail.com,034 24 861 17,F,Excel,2024,5
+Rabee,Marie,marie.rabe@hotmail.com,+261342486117,F,Python,2024,5
+Rabe,Marie,marie.rabe@hotmail.com,+261342486117,F,Excel,2024,5
+Randria,Soa,soa.randria@gmail.com,0347453914,F,Python,2024,6
+Soa,Randria,soa.randria@gmail.com,0347453914,F,IA,2026,6
+Randria,Soa,soa.randria@gmail.com,0347453914,F,IA,2026,6
+Rasoa,Mamy,mamy.rasoa@yahoo.fr,032 11 653 54,M,IA,2026,7
+Rasoa,Mamy,mamy.rasoa@yahoo.fr,+261321165354,M,IA,2026,7
+Rasoa,Naivo,naivo.rasoa@gmail.com,0326187732,M,IA,2026,8
+Naivo,Rasoa,naivo.rasoa@gmail.com,+261326187732,M,Python,2024,8
+Naivo,Rasoa,naivo.rasoa@gmial.com,032 61 877 32,M,IA,2026,8
+Rakotomalala,Lalaina,lalaina.rakotomalala@hotmail.com,0380779751,F,Python,2024,9
+RAKOTOMALALA,Lalaina,lalaina.rakotomalala@hotmail.com,+261380779751,F,Data,2025,9
+Ravelo,Tsiky,tsiky.ravelo@gmail.com,+261348513199,F,Python,2024,10
+Raveelo,Tsiky,tsiky.ravelo@gmail.com,034 85 131 99,F,Excel,2024,10
+Ravello,Tsiky,tsiky.ravelo@gmail.com,+261348513199,F,Python,2024,10
+Rasoa,Marie,marie.rasoa@hotmail.com,034 41 398 22,F,IA,2026,11
+Rasolofo,Tiana,tiana.rasolofo@hotmail.com,+261320407714,F,Data,2025,12
+Rasolofo,Tiana,tiana.rasolofo@hotmail.com,032 04 077 14,F,IA,2026,12
+Razafy,Fanja,fanja.razafy@yahoo.fr,0332842572,F,IA,2026,13
+Rakoto,Fanja,fanja.rakoto@hotmail.com,0389645123,F,IA,2026,14
+Rakoto,Fanja,fanja.rakoto@hotmail.com,038 96 451 23,F,Data,2025,14
+Rakoto,Fanja,fanja.rakoto@hotmail.com,+261389645123,F,IA,2026,14
+Rakotoarisoa,Mamy,mamy.rakotoarisoa@hotmail.com,0335070003,M,Excel,2024,15
+Rakotoarisoa,Mamy,mamy.rakotoarisoa@hotmail.com,0335070003,M,IA,2026,15
+Rakotoarisoa,Mamy,mamy.rakotoarisoa@hotmail.com,0335070003,M,IA,2026,15
+Rakotomalala,Soa,soa.rakotomalala@yahoo.fr,+261332457852,F,Data,2025,16
+RAKOTOMALALA,Soa,soa.rakotomalala@yahoo.fr,0332457852,F,IA,2026,16
+Rakotomalalla,Soa,soa.rakotomalala@yahoo.fr,+261332457852,F,Excel,2024,16
+Randria,Mamy,mamy.randria@hotmail.com,+261381044476,M,Excel,2024,17
+Randria,Tsiky,tsiky.randria@gmail.com,032 07 811 51,F,Excel,2024,18
+Ravelo,Fanja,fanja.ravelo@hotmail.com,034 48 088 06,F,Python,2024,19
+Rasolofo,Mamy,mamy.rasolofo@gmail.com,032 99 814 24,M,Python,2024,20
+Rakotomalala,Fanja,fanja.rakotomalala@hotmail.com,0333927449,F,Data,2025,21
+Fanja,Rakotomalala,fanja.rakotomalala@hotmail.com,+261333927449,F,Excel,2024,21
+Rasolofo,Marie,marie.rasolofo@hotmail.com,038 12 955 70,F,Data,2025,22
+Randria,Tiana,tiana.randria@hotmail.com,+261385819015,F,IA,2026,23
+Randria,Tiana,tiana.randria@hotmail.com,0385819015,F,Python,2024,23
+Randriia,Tiana,tiana.randria@hotmail.com,038 58 190 15,F,Excel,2024,23
+Rakotomalala,Tsiky,tsiky.rakotomalala@hotmail.com,0334955006,F,Excel,2024,24
+Razafy,Naivo,naivo.razafy@yahoo.fr,0349272362,M,Data,2025,25
+Razaafy,Naivo,naivo.razafy@yahoo.fr,0349272362,M,Data,2025,25
+Razafy,Naivo,naivo.razafy@yahoo.fr,034 92 723 62,M,Data,2025,25
+Rakotoarisoa,Naivo,naivo.rakotoarisoa@yahoo.fr,+261320650551,M,Python,2024,26
+Rakotoarisoa,Naivo,naivo.rakotoarisoa@yahoo.fr,032 06 505 51,M,Data,2025,26
+Rakotoarisoa,Naivo,naivo.rakotoarisoa@yahoo.fr,032 06 505 51,M,IA,2026,26
+Razafy,Mamy,mamy.razafy@hotmail.com,0328318769,M,Excel,2024,27
+Rakotoarisoa,Tiana,tiana.rakotoarisoa@hotmail.com,+261326591828,F,Python,2024,28
+Rakotoarisoa,Tiana,tiana.rakotoarisoa@hotmail.com,0326591828,F,IA,2026,28
+Rakotoarisoa,Tiana,tiana.rakotoarisoa@hotmail.com,0326591828,F,IA,2026,28
+Rakoto,Jean,jean.rakoto@gmail.com,033 26 726 24,M,Excel,2024,29
+Rakoto,Jean,jean.rakoto@gmail.com,0332672624,M,Python,2024,29
+Randria,Jean,jean.randria@yahoo.fr,032 68 031 91,M,IA,2026,30
+Rakotoarisoa,Jean,jean.rakotoarisoa@hotmail.com,+261385196103,M,IA,2026,31
+Rakootoarisoa,Jean,jean.rakotoarisoa@hotmail.com,0385196103,M,Excel,2024,31
+Rakotoarisoa,Jean,jean.rakotoarisoa@hotmail.com,038 51 961 03,M,Data,2025,31
+Andrianarivo,Naivo,naivo.andrianarivo@hotmail.com,+261334039903,M,Data,2025,32
+Naivo,Andrianarivo,naivo.andrianarivo@hotmail.com,0334039903,M,Data,2025,32
+Rasolofo,Tsiky,tsiky.rasolofo@gmail.com,+261336358979,F,Excel,2024,33
+Rasolofo,Tsiky,tsiky.rasolofo@gmail.com,0336358979,F,Python,2024,33
+Rasoa,Tsiky,tsiky.rasoa@hotmail.com,+261339880739,F,Excel,2024,34
+Tsiky,Rasoa,tsiky.rasoa@hotmail.com,0339880739,F,Data,2025,34
+Rakotomalala,Hery,hery.rakotomalala@yahoo.fr,0332718828,M,Data,2025,35
+Ravelo,Mamy,mamy.ravelo@yahoo.fr,034 37 201 38,M,Data,2025,36
+Rakoto,Lalaina,lalaina.rakoto@gmail.com,0346395919,F,IA,2026,37
+Rakoto,Tiana,tiana.rakoto@hotmail.com,034 05 374 91,F,Data,2025,38
+Randria,Fanja,fanja.randria@hotmail.com,0332709577,F,Data,2025,39
+Randria,Fanja,fanja.randria@hotmail.com,0332709577,F,Excel,2024,39
+RANDRIA,Fanja,fanja.randria@hotmail.com,033 27 095 77,F,Excel,2024,39
+Rakotomalala,Marie,marie48@yahoo.fr,0333063387,F,Python,2024,100
+Rasolofo,Tiana,tiana.rasolofo@gmail.com,+261348685702,F,Excel,2024,101
+Rasoolofo,Tiana,tiana.rasolofo@gmail.com,034 86 857 02,F,Excel,2024,101
