@@ -20,5 +20,6 @@ class MatchConfig:
     probable_threshold: float = 0.70
     email_similar_threshold: float = 0.85   # en dessous : email "différent"
     name_conflict_threshold: float = 0.60   # similarité moyenne des noms
+    phone_near_score: float = 0.80
 
     

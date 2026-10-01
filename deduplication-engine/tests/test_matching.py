@@ -61,3 +61,38 @@ def test_different_people():
     a = rec(nom="Rakoto", prenom="Jean", email="a@x.mg", telephone="0341234567")
     b = rec(nom="Rasoanaivo", prenom="Marie", email="m@y.mg", telephone="0329876543")
     assert M.compare(a, b).classification == Classification.NONE
+
+
+def test_phone_one_digit_typo_with_same_email_is_certain():
+    a = rec(nom="Razafy", prenom="Fanja", email="fanja.razafy@yahoo.fr", telephone="0332842572")
+    b = rec(nom="Razafy", prenom="Fanja", email="fanja.razafy@yahoo.fr", telephone="0332842582")
+    r = M.compare(a, b)
+    assert r.classification == Classification.CERTAIN
+    assert "telephone_conflict" not in r.conflicts
+
+
+def test_phone_typo_with_new_email_goes_to_review():
+    a = rec(nom="Rasolofo", prenom="Marie", email="marie.rasolofo@hotmail.com", telephone="0381296570")
+    b = rec(nom="Rasolofo", prenom="Marie", email="marie92@gmail.com", telephone="0381295570")
+    assert M.compare(a, b).classification == Classification.PROBABLE
+
+
+def test_phone_transposition_counts_as_near():
+    a = rec(nom="Rabe", prenom="Tiana", telephone="0336872032")
+    b = rec(nom="Rabe", prenom="Tiana", telephone="0336872302")
+    assert "- Téléphone légèrement différent" in M.compare(a, b).reasons
+
+
+def test_same_surname_and_domain_different_first_name_is_not_similar_email():
+    a = rec(nom="Rakotoarisoa", prenom="Tiana", email="tiana.rakotoarisoa@hotmail.com", sexe="F")
+    b = rec(nom="Rakkotoarisoa", prenom="Jean", email="jean.rakotoarisoa@hotmail.com", sexe="M")
+    r = M.compare(a, b)
+    assert "- Email différent" in r.reasons
+    assert r.classification == Classification.NONE
+
+
+def test_domain_typo_is_still_similar_email():
+    a = rec(nom="Rakoto", prenom="Jean", email="jean.rakoto@gmail.com")
+    b = rec(nom="Rakoto", prenom="Jean", email="jean.rakoto@gmail.cm")
+    assert "- Email légèrement différent" in M.compare(a, b).reasons
+

@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from ..normalization import normalize_name
-from .comparators import compare_email, compare_exact, compare_names
+from .comparators import compare_email, compare_exact, compare_names, phone_distance
 from .config import MatchConfig
 
 BASE_FIELDS = {"nom", "prenom", "email", "telephone"}
@@ -45,8 +45,16 @@ class Matcher:
         if email_raw is not None and email_raw < c.email_similar_threshold:
             email_s = 0.0
 
-        # --- Téléphone
-        phone_s = compare_exact(a.telephone, b.telephone)
+        # --- Téléphone (0 identique, 1 proche, 2 différent)
+        phone_d = phone_distance(a.telephone, b.telephone)
+        if phone_d is None:
+            phone_s = None
+        elif phone_d == 0:
+            phone_s = 1.0
+        elif phone_d == 1:
+            phone_s = c.phone_near_score
+        else:
+            phone_s = 0.0
 
         scores: dict[str, float | None] = {
             "nom": nom_s, "prenom": prenom_s,
@@ -69,9 +77,11 @@ class Matcher:
         score = sum(c.weights[k] * v for k, v in used.items()) / total_w if total_w else 0.0
 
         # --- Explications
-        if phone_s == 1.0:
+        if phone_d == 0:
             reasons.append("+ Téléphone identique")
-        elif phone_s == 0.0:
+        elif phone_d == 1:
+            reasons.append("- Téléphone légèrement différent")
+        elif phone_d == 2:
             reasons.append("- Téléphone différent")
             conflicts.append("telephone_conflict")
 
@@ -99,16 +109,17 @@ class Matcher:
             conflicts.append("name_conflict")
 
         # --- Classification
-        strong = int(email_s == 1.0) + int(phone_s == 1.0)
+        strong = int(email_s == 1.0) + int(phone_d == 0)
+        phone_near = phone_d == 1
 
         if strong >= 1 and not conflicts and score >= c.certain_threshold:
             cls = Classification.CERTAIN
         elif score >= c.probable_threshold:
             cls = Classification.PROBABLE
-        elif strong == 2 or (strong == 1 and not name_conflict):
-            cls = Classification.PROBABLE   # identifiant fort + conflit => validation humaine
+        elif strong == 2 or ((strong == 1 or phone_near) and not name_conflict):
+            cls = Classification.PROBABLE   # indice fort ou proche + conflit => validation humaine
         else:
             cls = Classification.NONE
 
         return MatchResult(round(score, 4), cls, scores, reasons, conflicts)
-
+    

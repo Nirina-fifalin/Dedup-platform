@@ -59,3 +59,8 @@ print(f"=== PROBABLES à valider : {len(probables)} (5 premiers)")
 for a, b, res, same in probables[:5]:
     print(f"  [vérité : {'même personne' if same else 'personnes différentes'}]")
     show(a, b, res)
+
+bad = [p for p in probables if not p[3]]
+print(f"=== PROBABLES qui sont en réalité des personnes différentes : {len(bad)}")
+for a, b, res, _ in bad[:5]:
+    show(a, b, res)

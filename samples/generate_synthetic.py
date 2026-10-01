@@ -1,6 +1,8 @@
 import csv
 import random
 from pathlib import Path
+import sys
+HARD = "--hard" in sys.argv
 
 random.seed(42)
 
@@ -60,6 +62,22 @@ def perturb(p):
         email = email.replace("gmail", "gmial")
     return nom, prenom, email, phone
 
+def perturb_hard(p):
+    nom, prenom, email, _ = perturb(p)
+    raw_phone = p["phone"]
+
+    r = random.random()
+    if r < 0.20:       # faute de frappe dans le téléphone
+        i = random.randrange(2, 10)
+        raw_phone = raw_phone[:i] + str((int(raw_phone[i]) + 1) % 10) + raw_phone[i + 1:]
+    phone = "" if 0.20 <= r < 0.35 else fmt_phone(raw_phone)   # 15 % : téléphone absent
+
+    r = random.random()
+    if r < 0.15:       # nouvel email
+        email = f"{p['prenom']}{random.randint(10, 99)}@gmail.com".lower()
+    elif r < 0.25:     # email absent
+        email = ""
+    return nom, prenom, email, phone
 
 rows = []
 for p in people:
@@ -68,12 +86,12 @@ for p in people:
         if k == 0:
             nom, prenom, email, phone = p["nom"], p["prenom"], p["email"], fmt_phone(p["phone"])
         else:
-            nom, prenom, email, phone = perturb(p)
+            nom, prenom, email, phone = (perturb_hard if HARD else perturb)(p)
         rows.append({"nom": nom, "prenom": prenom, "email": email, "telephone": phone,
                      "sexe": p["sexe"], "formation": formation, "annee": annee,
                      "_truth": p["id"]})
 
-out = Path(__file__).parent / "synthetic" / "inscriptions_demo.csv"
+out = Path(__file__).parent / "synthetic" / ("inscriptions_demo_hard.csv" if HARD else "inscriptions_demo.csv")
 out.parent.mkdir(exist_ok=True)
 with out.open("w", newline="", encoding="utf-8") as f:
     w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
