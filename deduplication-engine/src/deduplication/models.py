@@ -21,7 +21,7 @@ class Issue:
 
 @dataclass
 class NormalizedRecord:
-    row: int                       # numéro de ligne dans le fichier source
+    row: int
     nom: str
     prenom: str
     email: str | None
@@ -30,4 +30,16 @@ class NormalizedRecord:
     raw: dict = field(default_factory=dict)                     # ligne d'origine, intacte
     corrections: list[Correction] = field(default_factory=list)
     issues: list[Issue] = field(default_factory=list)
+
+
+@dataclass
+class KnownPerson:
+    """Une personne déjà connue, avec toutes ses valeurs historiques."""
+    id: object
+    nom: str 
+    prenom: str
+    emails: list[str] = field(default_factory=list)
+    phones: list[str] = field(default_factory=list)   # E.164
+    extra: dict[str, str | None] = field(default_factory=dict)
+
 

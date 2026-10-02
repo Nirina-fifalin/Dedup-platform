@@ -1,5 +1,7 @@
 from deduplication import ColumnMapping, RecordNormalizer
 from deduplication.matching import Classification, Matcher
+from deduplication import KnownPerson
+
 
 N = RecordNormalizer(ColumnMapping(columns={
     "nom": "nom", "prenom": "prenom", "email": "email",
@@ -96,3 +98,27 @@ def test_domain_typo_is_still_similar_email():
     b = rec(nom="Rakoto", prenom="Jean", email="jean.rakoto@gmail.cm")
     assert "- Email légèrement différent" in M.compare(a, b).reasons
 
+
+def test_inscription_with_second_known_email_is_certain():
+    p = KnownPerson(id=1, nom="randria", prenom="tsiky",
+                    emails=["tsiky.randria@gmail.com", "tsiky29@gmail.com"],
+                    phones=["+261320781151"])
+    r = rec(nom="Randria", prenom="Tsiky", email="tsiky29@gmail.com", telephone="0320781151")
+    assert M.compare_to_person(r, p).classification == Classification.CERTAIN
+
+
+def test_inscription_with_unknown_email_goes_to_review():
+    p = KnownPerson(id=1, nom="randria", prenom="tsiky",
+                    emails=["tsiky.randria@gmail.com"], phones=["+261320781151"])
+    r = rec(nom="Randria", prenom="Tsiky", email="autre@yahoo.fr", telephone="0320781151")
+    assert M.compare_to_person(r, p).classification == Classification.PROBABLE
+
+
+def test_inscription_with_new_phone_matches_previous_phone():
+    p = KnownPerson(id=2, nom="rabe", prenom="hery",
+                    emails=["hery.rabe@gmail.com"],
+                    phones=["+261321111111", "+261331112222"])
+    r = rec(nom="Rabe", prenom="Hery", email="hery.rabe@gmail.com", telephone="0321111111")
+    res = M.compare_to_person(r, p)
+    assert res.classification == Classification.CERTAIN
+    assert "telephone_conflict" not in res.conflicts

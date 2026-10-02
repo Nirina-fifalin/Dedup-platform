@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+from types import SimpleNamespace
 
 from ..normalization import normalize_name
 from .comparators import compare_email, compare_exact, compare_names, phone_distance
@@ -19,9 +20,15 @@ class MatchResult:
     score: float
     classification: Classification
     field_scores: dict[str, float | None]
-    reasons: list[str] = field(default_factory=list)    # "+ ..." / "- ..."
-    conflicts: list[str] = field(default_factory=list)  # codes
+    reasons: list[str] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
 
+
+_ORDER = {Classification.CERTAIN: 2, Classification.PROBABLE: 1, Classification.NONE: 0}
+
+
+def _rank(res: "MatchResult") -> tuple[int, float]:
+    return (_ORDER[res.classification], res.score)
 
 class Matcher:
     def __init__(self, config: MatchConfig = MatchConfig()):
@@ -76,7 +83,7 @@ class Matcher:
         total_w = sum(c.weights[k] for k in used)
         score = sum(c.weights[k] * v for k, v in used.items()) / total_w if total_w else 0.0
 
-        # --- Explications
+        # -- Explications
         if phone_d == 0:
             reasons.append("+ Téléphone identique")
         elif phone_d == 1:
@@ -122,4 +129,25 @@ class Matcher:
             cls = Classification.NONE
 
         return MatchResult(round(score, 4), cls, scores, reasons, conflicts)
-    
+
+    def compare_to_person(self, record, person) -> MatchResult:
+        """Compare une inscription à une personne ayant plusieurs emails/téléphones.
+
+        On teste chaque combinaison (email, téléphone) connue de la personne et on
+        garde la meilleure : une inscription avec un ancien email ne doit pas être
+        pénalisée parce que la personne en a aussi un autre.
+        """
+        emails = list(person.emails) or [None]
+        phones = list(person.phones) or [None]
+        best = None
+        for e in emails:
+            for p in phones:
+                view = SimpleNamespace(
+                    nom=person.nom, prenom=person.prenom,
+                    email=e, telephone=p, extra=person.extra,
+                )
+                res = self.compare(record, view)
+                if best is None or _rank(res) > _rank(best):
+                    best = res
+        assert best is not None
+        return best
