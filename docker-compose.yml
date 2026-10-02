@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: dedup-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dedup}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dedup_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-dedup}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dedup} -d ${POSTGRES_DB:-dedup}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
