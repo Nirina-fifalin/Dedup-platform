@@ -18,6 +18,7 @@ class SourceFile(Base):
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(20), default="pending")
+    file_hash: Mapped[str | None] = mapped_column(String(64), index=True)
 
 
 class Formation(Base):
