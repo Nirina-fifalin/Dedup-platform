@@ -67,3 +67,17 @@ def test_import_creates_persons_registrations_and_review_cases(session, tmp_path
         select(func.count()).select_from(Formation).where(Formation.nom == "Excel 2024")
     ) == 1
 
+CSV_TYPO = """nom,prenom,email,telephone
+Testrako,Lalaina,lalaina.testrako@example.test,0349911119
+Testrakoo,Lalaina,lalaina.testrako@exmple.test,034 99 111 29
+"""
+
+
+def test_typo_in_name_email_and_phone_is_flagged_for_review(session, tmp_path):
+    f = tmp_path / "typo.csv"
+    f.write_text(CSV_TYPO, encoding="utf-8")
+
+    report = import_file(session, f, MAPPING, commit=False)
+
+    assert report.new_persons == 2      # pas de fusion automatique
+    assert report.to_review == 1        # mais le cas est signalé

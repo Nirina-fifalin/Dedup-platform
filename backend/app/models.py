@@ -32,7 +32,17 @@ class Formation(Base):
 
 class Person(Base):
     __tablename__ = "persons"
-    __table_args__ = (Index("ix_persons_names_norm", "nom_norm", "prenom_norm"),)
+    __table_args__ = (
+        Index("ix_persons_names_norm", "nom_norm", "prenom_norm"),
+        Index(
+            "ix_persons_nom_trgm", "nom_norm",
+            postgresql_using="gin", postgresql_ops={"nom_norm": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_persons_prenom_trgm", "prenom_norm",
+            postgresql_using="gin", postgresql_ops={"prenom_norm": "gin_trgm_ops"},
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     nom: Mapped[str] = mapped_column(String(200))

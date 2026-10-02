@@ -8,7 +8,7 @@ from pathlib import Path
 from deduplication import ColumnMapping, KnownPerson, NormalizedRecord, RecordNormalizer
 from deduplication.matching import Classification, Matcher, MatchResult
 from deduplication.matching.comparators import compare_email, phone_distance
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..models import (
@@ -106,25 +106,36 @@ def _to_known(p: Person) -> KnownPerson:
 
 
 def _find_candidates(session: Session, rec: NormalizedRecord) -> list[Person]:
-    """Blocking : email exact, téléphone exact, ou clé nom/prénom (dans les deux sens)."""
+    """Blocking : email exact, téléphone exact, ou nom ET prénom *similaires* (trigrammes).
+
+    Permissif par conception : le Matcher tranche ensuite. Le nom seul ne suffit
+    pas à devenir candidat (nom ET prénom doivent être proches), dans les deux
+    ordres pour couvrir les colonnes inversées.
+    """
     conds = []
     if rec.email:
         conds.append(Person.emails.any(PersonEmail.email == rec.email))
     if rec.telephone:
         conds.append(Person.phones.any(PersonPhone.phone == rec.telephone))
-    if rec.nom and rec.prenom:
-        conds.append(and_(Person.nom_norm == rec.nom, Person.prenom_norm == rec.prenom))
-        conds.append(and_(Person.nom_norm == rec.prenom, Person.prenom_norm == rec.nom))
-    if not conds:
-        return []
+    conds.append(and_(
+        Person.nom_norm.op("%")(rec.nom), Person.prenom_norm.op("%")(rec.prenom)
+    ))
+    conds.append(and_(
+        Person.nom_norm.op("%")(rec.prenom), Person.prenom_norm.op("%")(rec.nom)
+    ))
+
+    closeness = func.greatest(
+        func.similarity(Person.nom_norm, rec.nom) + func.similarity(Person.prenom_norm, rec.prenom),
+        func.similarity(Person.nom_norm, rec.prenom) + func.similarity(Person.prenom_norm, rec.nom),
+    )
     stmt = (
         select(Person)
         .where(Person.merged_into_id.is_(None), or_(*conds))
         .options(selectinload(Person.emails), selectinload(Person.phones))
+        .order_by(closeness.desc())
         .limit(50)
     )
     return list(session.scalars(stmt))
-
 
 def _rank_candidates(matcher: Matcher, rec: NormalizedRecord, candidates: list[Person]):
     scored: list[tuple[MatchResult, Person]] = [
