@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String,
-    UniqueConstraint, func, Text,
+    UniqueConstraint, func, Text, CheckConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -158,3 +158,15 @@ class ImportLogEntry(Base):
     normalized: Mapped[str | None] = mapped_column(Text)
     code: Mapped[str | None] = mapped_column(String(50))
     message: Mapped[str | None] = mapped_column(Text)
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (CheckConstraint("role IN ('admin', 'reviewer')", name="ck_users_role"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

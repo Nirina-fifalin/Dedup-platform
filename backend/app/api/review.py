@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..deps import get_session
-from ..models import MatchResultRecord, Person, Registration
+from ..deps import get_current_user, get_session
+from ..models import MatchResultRecord, Person, Registration, User
 from ..schemas import DecisionIn, PersonSummary, ReviewCase
 from ..services.merge import MergeNotAllowed, merge_persons
 
@@ -67,7 +67,7 @@ def get_case(case_id: int, session: Session = Depends(get_session)):
 
 
 @router.post("/{case_id}/decision", response_model=ReviewCase)
-def decide(case_id: int, body: DecisionIn, session: Session = Depends(get_session)):
+def decide(case_id: int, body: DecisionIn, session: Session = Depends(get_session), user: User = Depends(get_current_user)):
     c = session.get(MatchResultRecord, case_id)
     if c is None:
         raise HTTPException(404, "Cas introuvable")
@@ -79,13 +79,13 @@ def decide(case_id: int, body: DecisionIn, session: Session = Depends(get_sessio
             raise HTTPException(422, "Ce cas n'a pas de personne existante avec laquelle fusionner")
         try:
             merge_persons(session, c.person_a_id, c.person_b_id,
-                          performed_by=body.decided_by, case=c)
+                          performed_by=user.email, case=c)
         except MergeNotAllowed as e:
             session.rollback()
             raise HTTPException(409, str(e))
     else:
         c.status = body.decision
-        c.decided_by = body.decided_by
+        c.decided_by = user.email
         c.decided_at = datetime.now(timezone.utc)
 
     session.commit()
