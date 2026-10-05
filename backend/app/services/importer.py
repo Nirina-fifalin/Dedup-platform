@@ -49,6 +49,14 @@ class ImportReport:
             lines.append("Problèmes de données : " + ", ".join(f"{k}={v}" for k, v in self.issues.items()))
         return "\n".join(lines)
 
+    def to_dict(self) -> dict:
+        return {
+            "source_file_id": self.source_file_id, "rows": self.rows,
+            "new_persons": self.new_persons, "matched_existing": self.matched_existing,
+            "to_review": self.to_review, "skipped": self.skipped,
+            "issues": dict(self.issues),
+        }
+
 
 # ── Lecture des fichiers ────────────────────────────────────────────────────
 
@@ -285,6 +293,7 @@ def import_file(
                 ))
                 report.to_review += 1
 
+        source.report = report.to_dict()
         source.status = "done"
         session.flush()
         if commit:

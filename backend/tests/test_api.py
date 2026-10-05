@@ -1,0 +1,81 @@
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app.db import engine
+from app.deps import get_session
+from app.main import app
+
+
+@pytest.fixture
+def client():
+    conn = engine.connect()
+    outer = conn.begin()
+    session = Session(bind=conn, join_transaction_mode="create_savepoint", expire_on_commit=False)
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+        session.close()
+        outer.rollback()
+        conn.close()
+
+
+CSV_SAME = (
+    "nom,prenom,email,telephone\n"
+    "Apitest,Zeta,zeta.apitest@example.test,0349922201\n"
+    "Apitest,Zeta,zeta.apitest@example.test,0349922201\n"
+)
+CSV_CONFLICT = (
+    "nom,prenom,email,telephone\n"
+    "Apitest,Eta,eta.apitest@example.test,0349922202\n"
+    "Apitest,Eta,eta.apitest@example.test,0329922299\n"
+)
+
+
+def upload(client, content, name="api.csv"):
+    return client.post("/api/v1/files", files={"file": (name, content, "text/csv")})
+
+
+def test_upload_reports_and_rejects_duplicate_file(client):
+    r = upload(client, CSV_SAME)
+    assert r.status_code == 201
+    body = r.json()
+    assert (body["rows"], body["new_persons"], body["matched_existing"]) == (2, 1, 1)
+
+    assert upload(client, CSV_SAME).status_code == 409
+
+    info = client.get(f"/api/v1/files/{body['source_file_id']}").json()
+    assert info["status"] == "done"
+    assert info["report"]["rows"] == 2
+
+
+def test_rejects_unsupported_format(client):
+    r = client.post("/api/v1/files", files={"file": ("x.pdf", b"%PDF", "application/pdf")})
+    assert r.status_code == 415
+
+
+def test_rejects_missing_required_columns(client):
+    r = upload(client, "nom,email\nApitest,a@example.test\n", name="bad.csv")
+    assert r.status_code == 422
+
+
+def test_review_queue_and_decision(client):
+    assert upload(client, CSV_CONFLICT, name="conflict.csv").status_code == 201
+
+    cases = client.get("/api/v1/review?limit=200").json()
+    mine = next(c for c in cases if c["person_a"]["nom"] == "Apitest")
+    assert "telephone_conflict" in mine["conflicts"]
+    assert mine["person_b"]["registrations"] == 1
+
+    r = client.post(
+        f"/api/v1/review/{mine['id']}/decision",
+        json={"decision": "kept_separate", "decided_by": "test"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "kept_separate"
+
+    again = client.post(f"/api/v1/review/{mine['id']}/decision", json={"decision": "postponed"})
+    assert again.status_code == 409
+

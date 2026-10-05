@@ -79,5 +79,5 @@ def test_typo_in_name_email_and_phone_is_flagged_for_review(session, tmp_path):
 
     report = import_file(session, f, MAPPING, commit=False)
 
-    assert report.new_persons == 2      # pas de fusion automatique
-    assert report.to_review == 1        # mais le cas est signalé
+    assert report.new_persons == 2
+    assert report.to_review == 1

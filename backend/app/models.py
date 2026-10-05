@@ -19,6 +19,7 @@ class SourceFile(Base):
     row_count: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     file_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    report: Mapped[dict | None] = mapped_column(JSONB)
 
 
 class Formation(Base):
