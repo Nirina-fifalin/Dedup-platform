@@ -123,10 +123,22 @@ class MatchResultRecord(Base):
     score: Mapped[float] = mapped_column(Float)
     classification: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
-    # pending | merged | kept_separate | postponed
     reasons: Mapped[list] = mapped_column(JSONB, default=list)
     conflicts: Mapped[list] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decided_by: Mapped[str | None] = mapped_column(String(100))
-    
+
+class PersonMerge(Base):
+    """Journal des fusions, avec de quoi les annuler (§17, §37)."""
+    __tablename__ = "person_merges"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_person_id: Mapped[int] = mapped_column(ForeignKey("persons.id"), index=True)
+    target_person_id: Mapped[int] = mapped_column(ForeignKey("persons.id"), index=True)
+    case_id: Mapped[int | None] = mapped_column(ForeignKey("match_results.id"))
+    performed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    performed_by: Mapped[str | None] = mapped_column(String(100))
+    undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    undone_by: Mapped[str | None] = mapped_column(String(100))
+    snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)

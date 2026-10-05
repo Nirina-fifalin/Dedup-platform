@@ -49,6 +49,24 @@ class ReviewCase(BaseModel):
 
 
 class DecisionIn(BaseModel):
-    decision: Literal["kept_separate", "postponed"]
+    decision: Literal["kept_separate", "postponed", "merged"]
     decided_by: str | None = None
+
+
+class UndoIn(BaseModel):
+    undone_by: str | None = None
+
+
+class MergeOut(BaseModel):
+    id: int
+    source_person_id: int
+    target_person_id: int
+    case_id: int | None
+    performed_at: datetime
+    performed_by: str | None
+    undone_at: datetime | None
+    undone_by: str | None
+    registrations_moved: int
+    emails_moved: int
+    phones_moved: int
 

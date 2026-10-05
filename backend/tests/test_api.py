@@ -79,3 +79,38 @@ def test_review_queue_and_decision(client):
     again = client.post(f"/api/v1/review/{mine['id']}/decision", json={"decision": "postponed"})
     assert again.status_code == 409
 
+
+CSV_MERGE = (
+    "nom,prenom,email,telephone\n"
+    "Apitest,Theta,theta.apitest@example.test,0349922203\n"
+    "Apitest,Theta,theta.apitest@example.test,0329922298\n"
+)
+
+
+def test_merge_decision_then_undo_reopens_the_case(client):
+    assert upload(client, CSV_MERGE, name="merge.csv").status_code == 201
+    case = next(c for c in client.get("/api/v1/review?limit=200").json()
+                if c["person_a"]["prenom"] == "Theta")
+
+    r = client.post(f"/api/v1/review/{case['id']}/decision",
+                    json={"decision": "merged", "decided_by": "test"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "merged"
+    assert r.json()["person_a"]["registrations"] == 0
+    assert r.json()["person_b"]["registrations"] == 2
+    assert len(r.json()["person_b"]["phones"]) == 2
+    assert len(r.json()["person_b"]["emails"]) == 1
+
+    merge = next(m for m in client.get("/api/v1/merges").json() if m["case_id"] == case["id"])
+    assert merge["registrations_moved"] == 1
+
+    undo = client.post(f"/api/v1/merges/{merge['id']}/undo", json={"undone_by": "test"})
+    assert undo.status_code == 200
+    assert undo.json()["undone_at"] is not None
+
+    back = client.get(f"/api/v1/review/{case['id']}").json()
+    assert back["status"] == "pending"
+    assert back["person_a"]["registrations"] == 1
+    assert back["person_a"]["emails"] == ["theta.apitest@example.test"]
+
+    assert client.post(f"/api/v1/merges/{merge['id']}/undo", json={}).status_code == 409

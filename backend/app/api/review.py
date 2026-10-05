@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..deps import get_session
 from ..models import MatchResultRecord, Person, Registration
 from ..schemas import DecisionIn, PersonSummary, ReviewCase
+from ..services.merge import MergeNotAllowed, merge_persons
 
 router = APIRouter(prefix="/review", tags=["review"])
 
@@ -72,9 +73,20 @@ def decide(case_id: int, body: DecisionIn, session: Session = Depends(get_sessio
         raise HTTPException(404, "Cas introuvable")
     if c.status not in ("pending", "postponed"):
         raise HTTPException(409, f"Cas déjà décidé : {c.status}")
-    c.status = body.decision
-    c.decided_by = body.decided_by
-    c.decided_at = datetime.now(timezone.utc)
+
+    if body.decision == "merged":
+        if c.person_b_id is None:
+            raise HTTPException(422, "Ce cas n'a pas de personne existante avec laquelle fusionner")
+        try:
+            merge_persons(session, c.person_a_id, c.person_b_id,
+                          performed_by=body.decided_by, case=c)
+        except MergeNotAllowed as e:
+            session.rollback()
+            raise HTTPException(409, str(e))
+    else:
+        c.status = body.decision
+        c.decided_by = body.decided_by
+        c.decided_at = datetime.now(timezone.utc)
+
     session.commit()
     return _case(session, c)
-
