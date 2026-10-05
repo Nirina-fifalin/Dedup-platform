@@ -30,3 +30,20 @@ def test_homonyms_with_different_contacts_stay_separate_and_unflagged():
     ])
     assert len(res.clusters) == 2
     assert res.review == []
+
+
+from deduplication import apply_same
+
+
+def test_apply_same_merges_confirmed_pair_and_clears_review():
+    res = run([
+        dict(nom="Rakoto", prenom="Jean", email="jean@x.mg", telephone="0341234567"),
+        dict(nom="RAKOTO", prenom="Jean", email="jean@x.mg", telephone="034 12 345 67"),
+        dict(nom="Rasoa", prenom="Marie", email="m@x.mg", telephone="0329876543"),
+        dict(nom="Rasoa", prenom="Marie", email="m@x.mg", telephone="0331111111"),
+    ])
+    assert len(apply_same(res, []).clusters) == 3        # sans décision : rien ne change
+    final = apply_same(res, [(2, 3)])
+    assert len(final.clusters) == 2
+    assert final.person_of[2] == final.person_of[3]
+    assert final.review == []
