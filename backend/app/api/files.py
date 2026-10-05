@@ -1,15 +1,18 @@
+import re
 import json
 import tempfile
 from pathlib import Path
 
 from deduplication import ColumnMapping, MissingColumnsError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from ..deps import get_session
 from ..models import SourceFile
 from ..schemas import ImportReportOut, SourceFileOut
 from ..services.importer import AlreadyImportedError, import_file
+from ..services.export import build_export
 
 router = APIRouter(prefix="/files", tags=["files"])
 
@@ -75,3 +78,20 @@ def get_file(source_file_id: int, session: Session = Depends(get_session)):
         row_count=sf.row_count, status=sf.status, report=sf.report,
     )
 
+
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get("/{source_file_id}/export")
+def export_file(source_file_id: int, session: Session = Depends(get_session)):
+    sf = session.get(SourceFile, source_file_id)
+    if sf is None:
+        raise HTTPException(404, "Fichier source introuvable")
+    if sf.status != "done":
+        raise HTTPException(409, f"Import non terminé (statut : {sf.status})")
+    data = build_export(session, source_file_id)
+    stem = re.sub(r"[^A-Za-z0-9._-]", "_", Path(sf.filename).stem) or "export"
+    return Response(
+        content=data, media_type=XLSX,
+        headers={"Content-Disposition": f'attachment; filename="{stem}_nettoye.xlsx"'},
+    )

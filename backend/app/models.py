@@ -2,7 +2,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String,
-    UniqueConstraint, func,
+    UniqueConstraint, func, Text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -129,6 +129,7 @@ class MatchResultRecord(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decided_by: Mapped[str | None] = mapped_column(String(100))
 
+
 class PersonMerge(Base):
     """Journal des fusions, avec de quoi les annuler (§17, §37)."""
     __tablename__ = "person_merges"
@@ -142,3 +143,18 @@ class PersonMerge(Base):
     undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     undone_by: Mapped[str | None] = mapped_column(String(100))
     snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class ImportLogEntry(Base):
+    """Corrections de normalisation et problèmes de données, par ligne (§21)."""
+    __tablename__ = "import_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_file_id: Mapped[int] = mapped_column(ForeignKey("source_files.id"), index=True)
+    source_row: Mapped[int | None] = mapped_column(Integer)
+    field: Mapped[str] = mapped_column(String(50))
+    kind: Mapped[str] = mapped_column(String(20))
+    original: Mapped[str | None] = mapped_column(Text)
+    normalized: Mapped[str | None] = mapped_column(Text)
+    code: Mapped[str | None] = mapped_column(String(50))
+    message: Mapped[str | None] = mapped_column(Text)

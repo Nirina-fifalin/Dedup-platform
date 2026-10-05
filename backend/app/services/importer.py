@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..models import (
     Formation, MatchResultRecord, Person, PersonEmail, PersonPhone,
-    Registration, SourceFile,
+    Registration, SourceFile, ImportLogEntry,
 )
 
 _ORDER = {Classification.CERTAIN: 2, Classification.PROBABLE: 1, Classification.NONE: 0}
@@ -203,6 +203,10 @@ def _add_contacts(person: Person, rec: NormalizedRecord, reg: Registration, matc
         person.sexe = rec.extra["sexe"]
 
 
+def _is_cosmetic(original: str, normalized: str | None) -> bool:
+    """Majuscules/espaces seulement : pas la peine de le journaliser."""
+    return normalized is not None and original.strip().casefold() == normalized
+
 # ── Import ──────────────────────────────────────────────────────────────────
 
 def import_file(
@@ -234,8 +238,19 @@ def import_file(
 
     try:
         for row, rec in zip(rows, normalizer.normalize_rows(rows)):
+            for corr in rec.corrections:
+                if _is_cosmetic(corr.original, corr.normalized):
+                    continue
+                session.add(ImportLogEntry(
+                    source_file_id=source.id, source_row=corr.row, field=corr.field,
+                    kind="correction", original=corr.original, normalized=corr.normalized,
+                ))
             for issue in rec.issues:
                 report.issues[issue.code] += 1
+                session.add(ImportLogEntry(
+                    source_file_id=source.id, source_row=issue.row, field=issue.field,
+                    kind="issue", code=issue.code, message=issue.message,
+                ))
             if not rec.nom or not rec.prenom:
                 report.skipped += 1
                 continue

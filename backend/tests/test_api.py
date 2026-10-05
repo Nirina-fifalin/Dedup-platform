@@ -114,3 +114,37 @@ def test_merge_decision_then_undo_reopens_the_case(client):
     assert back["person_a"]["emails"] == ["theta.apitest@example.test"]
 
     assert client.post(f"/api/v1/merges/{merge['id']}/undo", json={}).status_code == 409
+
+from io import BytesIO
+
+from openpyxl import load_workbook
+
+CSV_EXPORT = (
+    "nom,prenom,email,telephone\n"
+    "EXPORTTEST,Iota,Iota.Exporttest@EXAMPLE.test,034 99 222 04\n"
+    "Exporttest,Iota,iota.exporttest@example.test,0329922297\n"
+    "=1+1,Kappa,kappa.exporttest@example.test,0349922205\n"
+)
+
+
+def test_export_sheets_corrections_and_formula_guard(client):
+    body = upload(client, CSV_EXPORT, name="export.csv").json()
+    r = client.get(f"/api/v1/files/{body['source_file_id']}/export")
+    assert r.status_code == 200
+    assert "attachment" in r.headers["content-disposition"]
+
+    wb = load_workbook(BytesIO(r.content))
+    assert wb.sheetnames == ["personnes", "inscriptions", "doublons", "a_verifier", "corrections"]
+    assert wb["personnes"].max_row == 1 + 3
+    assert wb["inscriptions"].max_row == 1 + 3
+    assert wb["doublons"].max_row == 1 + 1        # même email, téléphones différents
+    assert wb["a_verifier"].max_row == 1 + 1
+
+    # Valeur saisie conservée, mais neutralisée pour Excel
+    inscriptions = list(wb["inscriptions"].iter_rows(min_row=2, values_only=True))
+    assert inscriptions[2][5] == "'=1+1"
+
+    corrections = list(wb["corrections"].iter_rows(min_row=2, values_only=True))
+    assert any(c[0] == 2 and c[1] == "telephone" and c[3] == "034 99 222 04" for c in corrections)
+    # les simples changements de casse ne polluent pas la feuille
+    assert not any(c[0] == 2 and c[1] in ("nom", "email") and c[2] == "correction" for c in corrections)
