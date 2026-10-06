@@ -2,14 +2,17 @@ import queue
 import threading
 from collections import Counter
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 from deduplication import (
-    ColumnMapping, DedupResult, NormalizedRecord, RecordNormalizer, apply_same, deduplicate,
+    ColumnMapping, DedupResult, MatchResult, NormalizedRecord, RecordNormalizer,
+    apply_same, deduplicate,
 )
 
-from file_reader import guess_mapping, read_rows
+from exporter import export_workbook
+from file_reader import guess_mapping, load_saved_mapping, read_headers, read_rows, save_mapping
+from mapping_dialog import MappingDialog
 from review_window import ReviewWindow
 
 ctk.set_appearance_mode("system")
@@ -20,8 +23,8 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Déduplication des inscriptions")
-        self.geometry("560x480")
-        self.minsize(480, 440)
+        self.geometry("560x500")
+        self.minsize(480, 460)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(4, weight=1)
 
@@ -30,6 +33,8 @@ class App(ctk.CTk):
         self._review_win: ReviewWindow | None = None
         self.records: list[NormalizedRecord] | None = None
         self.result: DedupResult | None = None
+        self.final: DedupResult | None = None
+        self.pending_cases: list[tuple[int, int, MatchResult]] = []
         self.mapping: dict[str, str] = {}
         self.decisions: dict[tuple[int, int], str] = {}   # (i, j) -> "same" | "different"
 
@@ -50,7 +55,12 @@ class App(ctk.CTk):
         self.review_btn = ctk.CTkButton(
             buttons, text="Vérifier les paires", command=self.open_review, state="disabled"
         )
-        self.review_btn.pack(side="left")
+        self.review_btn.pack(side="left", padx=(0, 10))
+        self.export_btn = ctk.CTkButton(
+            buttons, text="Exporter…", command=self.export, state="disabled",
+            fg_color="#2e7d32", hover_color="#1b5e20",
+        )
+        self.export_btn.pack(side="left")
 
         self.progress = ctk.CTkProgressBar(self, mode="indeterminate")
         self.progress.grid(row=3, column=0, padx=20, sticky="ew")
@@ -73,19 +83,34 @@ class App(ctk.CTk):
         self.file_label.configure(text=self._path.name)
         self.run_btn.configure(state="normal")
         self.review_btn.configure(text="Vérifier les paires", state="disabled")
-        self.records, self.result, self.decisions = None, None, {}
+        self.export_btn.configure(state="disabled")
+        self.records, self.result, self.final, self.decisions = None, None, None, {}
+        self.pending_cases = []
         self._set_output("")
 
     def run(self):
         if self._path is None:
             return
+        try:
+            headers = read_headers(self._path)
+        except Exception as e:
+            self._set_output("⚠ " + str(e))
+            return
+        initial = load_saved_mapping(headers) or guess_mapping(headers)
+        MappingDialog(self, headers, initial, on_confirm=lambda m: self._start(headers, m))
+
+    def _start(self, headers: list[str], mapping: dict[str, str]):
+        if self._path is None:
+            return
+        save_mapping(headers, mapping)
         self.choose_btn.configure(state="disabled")
         self.run_btn.configure(state="disabled")
         self.review_btn.configure(state="disabled")
+        self.export_btn.configure(state="disabled")
         self._set_output("")
         self.progress.grid()
         self.progress.start()
-        threading.Thread(target=self._work, args=(self._path,), daemon=True).start()
+        threading.Thread(target=self._work, args=(self._path, mapping), daemon=True).start()
         self.after(100, self._poll)
 
     def open_review(self):
@@ -99,19 +124,35 @@ class App(ctk.CTk):
             on_close=self._refresh,
         )
 
+    def export(self):
+        if self.records is None or self.final is None or self._path is None:
+            return
+        target = filedialog.asksaveasfilename(
+            title="Enregistrer le fichier nettoyé", defaultextension=".xlsx",
+            initialfile=f"{self._path.stem}_nettoye.xlsx", filetypes=[("Excel", "*.xlsx")],
+        )
+        if not target:
+            return
+        try:
+            export_workbook(target, self.records, self.final, self.pending_cases, self.mapping)
+        except PermissionError:
+            messagebox.showerror(
+                "Export impossible",
+                "Le fichier est ouvert dans Excel ou protégé en écriture.\n"
+                "Ferme-le, ou choisis un autre nom.",
+            )
+            return
+        except Exception as e:
+            messagebox.showerror("Export impossible", str(e))
+            return
+        messagebox.showinfo("Export terminé", f"Fichier enregistré :\n{target}")
+
     # --- Travail en arrière-plan (la fenêtre reste réactive)
-    def _work(self, path: Path):
+    def _work(self, path: Path, mapping: dict[str, str]):
         try:
             rows = read_rows(path)
             if not rows:
                 raise ValueError("Le fichier est vide.")
-            mapping = guess_mapping(rows[0].keys())
-            missing = [f for f in ("nom", "prenom") if f not in mapping]
-            if missing:
-                raise ValueError(
-                    "Colonnes introuvables : " + ", ".join(missing)
-                    + "\n\nColonnes du fichier :\n" + ", ".join(map(str, rows[0].keys()))
-                )
             records = list(RecordNormalizer(ColumnMapping(columns=mapping)).normalize_rows(rows))
             self._queue.put(("ok", records, deduplicate(records), mapping))
         except Exception as e:
@@ -143,8 +184,12 @@ class App(ctk.CTk):
         same = [p for p, d in self.decisions.items() if d == "same"]
         different = [p for p, d in self.decisions.items() if d == "different"]
         final = apply_same(result, same)
-        pending = [(i, j) for i, j, _ in final.review if self.decisions.get((i, j)) != "different"]
+        pending = [
+            (i, j, res) for i, j, res in final.review
+            if self.decisions.get((i, j)) != "different"
+        ]
         contradictions = [p for p in different if final.person_of[p[0]] == final.person_of[p[1]]]
+        self.final, self.pending_cases = final, pending
 
         persons = len(final.clusters)
         no_name = sum(1 for r in records if any(i.code == "name_missing" for i in r.issues))
@@ -171,6 +216,7 @@ class App(ctk.CTk):
             text=f"Vérifier les paires ({len(pending)} en attente)",
             state="normal" if result.review else "disabled",
         )
+        self.export_btn.configure(state="normal")
 
     def _set_output(self, text: str):
         self.output.configure(state="normal")
