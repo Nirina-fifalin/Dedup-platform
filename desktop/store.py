@@ -4,9 +4,11 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import closing
 
 from deduplication import DedupResult, KnownPerson, NormalizedRecord
 from deduplication.matching.comparators import compare_email, phone_distance
+from deduplication.normalization import normalize_email, normalize_phone, split_emails, split_phones
 
 from exporter import EMAIL_SIMILAR, _collect_emails, _collect_phones, _raw
 
@@ -107,8 +109,7 @@ def stats(conn: sqlite3.Connection) -> tuple[int, int, int]:
     )
 
 
-def load_known(conn: sqlite3.Connection) -> list[KnownPerson]:
-    """Toutes les personnes de la base, avec tous leurs emails et téléphones."""
+def _read_known(conn: sqlite3.Connection) -> list[KnownPerson]:
     persons: dict[int, KnownPerson] = {}
     for pid, nom, prenom, nom_norm, prenom_norm, sexe in conn.execute(
         "SELECT id, nom, prenom, nom_norm, prenom_norm, sexe FROM persons ORDER BY id"
@@ -126,6 +127,20 @@ def load_known(conn: sqlite3.Connection) -> list[KnownPerson]:
     ):
         persons[pid].phones.append(phone)
     return list(persons.values())
+
+
+def load_known(conn: sqlite3.Connection, replacing: list[int] | None = None) -> list[KnownPerson]:
+    """Personnes de la base. `replacing` : fichiers qu'on s'apprête à remplacer, ignorés ici
+    (on travaille sur une copie en mémoire, la vraie base n'est pas touchée)."""
+    if not replacing:
+        return _read_known(conn)
+    copy = sqlite3.connect(":memory:")
+    try:
+        conn.backup(copy)
+        remove_file_versions(copy, replacing)
+        return _read_known(copy)
+    finally:
+        copy.close()
 
 
 def known_as_record(kp: KnownPerson, mapping: dict[str, str]) -> NormalizedRecord:
@@ -169,6 +184,90 @@ def _add_contacts(conn: sqlite3.Connection, pid: int, emails: list[str], phones:
             have_p.append(phone)
 
 
+def previous_versions(conn: sqlite3.Connection, filename: str) -> list[tuple[int, str, int]]:
+    """Fichiers déjà enregistrés sous le même nom : (id, date d'enregistrement, nb de lignes)."""
+    return conn.execute(
+        "SELECT id, imported_at, row_count FROM source_files "
+        "WHERE lower(filename) = lower(?) ORDER BY id",
+        (filename,),
+    ).fetchall()
+
+
+def _contacts_from_cells(email_cells: list, phone_cells: list) -> tuple[list[str], list[str]]:
+    """Mêmes règles qu'à l'import : on ne garde que les valeurs valides, sans doublon ni faute proche."""
+    emails: list[str] = []
+    phones: list[str] = []
+    for cell in email_cells:
+        for part in split_emails(cell):
+            e = normalize_email(part)
+            if e.is_valid and e.normalized and all(
+                (compare_email(e.normalized, o) or 0) < EMAIL_SIMILAR for o in emails
+            ):
+                emails.append(e.normalized)
+    for cell in phone_cells:
+        for part in split_phones(cell):
+            p = normalize_phone(part)
+            if p.is_valid and p.normalized and all(
+                phone_distance(p.normalized, o) == 2 for o in phones
+            ):
+                phones.append(p.normalized)
+    return emails, phones
+
+
+def rebuild_contacts(conn: sqlite3.Connection, person_id: int) -> None:
+    """Recalcule les emails/téléphones d'une personne à partir de ses inscriptions restantes."""
+    cells = conn.execute(
+        "SELECT email_saisi, telephone_saisi FROM registrations WHERE person_id = ? ORDER BY id",
+        (person_id,),
+    ).fetchall()
+    emails, phones = _contacts_from_cells([c[0] for c in cells], [c[1] for c in cells])
+    conn.execute("DELETE FROM person_emails WHERE person_id = ?", (person_id,))
+    conn.execute("DELETE FROM person_phones WHERE person_id = ?", (person_id,))
+    for k, email in enumerate(emails):
+        conn.execute(
+            "INSERT INTO person_emails (person_id, email, is_primary) VALUES (?, ?, ?)",
+            (person_id, email, int(k == 0)),
+        )
+    for k, phone in enumerate(phones):
+        conn.execute(
+            "INSERT INTO person_phones (person_id, phone, is_primary) VALUES (?, ?, ?)",
+            (person_id, phone, int(k == 0)),
+        )
+
+
+def remove_file_versions(conn: sqlite3.Connection, file_ids: list[int]) -> None:
+    """Retire des fichiers enregistrés et leurs inscriptions. Les personnes qui n'ont plus
+    aucune inscription disparaissent ; les autres voient leurs contacts recalculés."""
+    if not file_ids:
+        return
+    marks = ",".join("?" * len(file_ids))
+    affected = [r[0] for r in conn.execute(
+        f"SELECT DISTINCT person_id FROM registrations WHERE source_file_id IN ({marks})", file_ids
+    )]
+    conn.execute(f"DELETE FROM registrations WHERE source_file_id IN ({marks})", file_ids)
+    conn.execute(f"DELETE FROM source_files WHERE id IN ({marks})", file_ids)
+    for pid in affected:
+        left = conn.execute(
+            "SELECT count(*) FROM registrations WHERE person_id = ?", (pid,)
+        ).fetchone()[0]
+        if left:
+            rebuild_contacts(conn, pid)
+        else:
+            conn.execute("DELETE FROM person_emails WHERE person_id = ?", (pid,))
+            conn.execute("DELETE FROM person_phones WHERE person_id = ?", (pid,))
+            conn.execute("DELETE FROM persons WHERE id = ?", (pid,))
+
+
+def backup_to(target: Path, source: Path = DB_PATH) -> None:
+    """Copie cohérente de la base (sûre même si elle vient d'être modifiée)."""
+    with closing(connect(source)) as src:
+        dest = sqlite3.connect(target)
+        try:
+            src.backup(dest)
+        finally:
+            dest.close()
+
+
 def save_analysis(
     conn: sqlite3.Connection,
     path: str | Path,
@@ -176,10 +275,12 @@ def save_analysis(
     final: DedupResult,
     mapping: dict[str, str],
     attach: dict[int, int] | None = None,
+    replace: list[int] | None = None,
 ) -> SaveReport:
     """Enregistre le résultat d'une analyse. Tout ou rien : une erreur n'écrit rien.
 
-    attach : numéro de groupe -> id d'une personne déjà en base à laquelle le rattacher.
+    attach  : numéro de groupe -> id d'une personne déjà en base à laquelle le rattacher.
+    replace : fichiers déjà enregistrés (anciennes versions) que celui-ci remplace.
     """
     attach = attach or {}
     path = Path(path)
@@ -189,6 +290,8 @@ def save_analysis(
 
     now = _now()
     with conn:   # une seule transaction : validée à la fin, annulée en cas d'erreur
+        if replace:
+            remove_file_versions(conn, replace)
         source_id = _insert(
             conn,
             "INSERT INTO source_files (filename, file_hash, imported_at, row_count) VALUES (?, ?, ?, ?)",
@@ -225,3 +328,33 @@ def save_analysis(
                 ),
             )
     return SaveReport(source_id, created, len(final.clusters) - created, len(records))
+
+
+def list_persons(conn: sqlite3.Connection) -> list[tuple]:
+    """Une ligne par personne : (n°, nom, prénom, sexe, emails, téléphones, nb d'inscriptions)."""
+    return conn.execute(
+        """
+        SELECT p.id, p.nom, p.prenom, COALESCE(p.sexe, ''),
+          COALESCE((SELECT group_concat(email, ' | ') FROM
+                      (SELECT email FROM person_emails WHERE person_id = p.id
+                       ORDER BY is_primary DESC, id)), ''),
+          COALESCE((SELECT group_concat(phone, ' | ') FROM
+                      (SELECT phone FROM person_phones WHERE person_id = p.id
+                       ORDER BY is_primary DESC, id)), ''),
+          (SELECT count(*) FROM registrations WHERE person_id = p.id)
+        FROM persons p ORDER BY p.id
+        """
+    ).fetchall()
+
+
+def person_registrations(conn: sqlite3.Connection, person_id: int) -> list[tuple]:
+    """Formations d'une personne : (formation, fichier d'origine, email saisi, téléphone saisi)."""
+    return conn.execute(
+        """
+        SELECT COALESCE(r.formation, ''), f.filename,
+               COALESCE(r.email_saisi, ''), COALESCE(r.telephone_saisi, '')
+        FROM registrations r JOIN source_files f ON f.id = r.source_file_id
+        WHERE r.person_id = ? ORDER BY r.id
+        """,
+        (person_id,),
+    ).fetchall()

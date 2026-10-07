@@ -46,3 +46,7 @@ def test_phone_empty():
 ])
 def test_split_phones(raw, expected):
     assert len(split_phones(raw)) == expected
+
+
+def test_seven_digit_local_number_is_not_valid():
+    assert not normalize_phone("7672202").is_valid

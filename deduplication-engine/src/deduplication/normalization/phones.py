@@ -28,5 +28,8 @@ def normalize_phone(value, default_region: str = "MG") -> PhoneResult:
         return PhoneResult(raw, None, False)
 
     e164 = phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-    return PhoneResult(raw, e164, phonenumbers.is_valid_number(parsed))
+    # 7 chiffres : numéro local sans indicatif. On ne devine pas l'indicatif.
+    digits = sum(ch.isdigit() for ch in raw)
+    is_valid = phonenumbers.is_valid_number(parsed) and digits != 7
+    return PhoneResult(raw, e164, is_valid)
 
