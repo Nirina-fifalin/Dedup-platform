@@ -51,3 +51,5 @@ Desktop.ini
 $RECYCLE.BIN/
 *.log
 desktop/column_mappings.json
+desktop/data/
+*.db

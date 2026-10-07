@@ -10,6 +10,19 @@ DIFF_COLOR = ("#c2570c", "#f0a060")
 Pair = tuple[int, int, MatchResult]
 
 
+def _differs(a: NormalizedRecord, b: NormalizedRecord, key: str) -> bool:
+    """Pour les emails et téléphones, une valeur en commun suffit pour ne pas signaler de différence."""
+    if key == "email":
+        xs, ys = a.emails, b.emails
+    elif key == "telephone":
+        xs, ys = a.phones, b.phones
+    else:
+        return getattr(a, key) != getattr(b, key)
+    if not xs and not ys:
+        return False
+    return set(xs).isdisjoint(ys)
+
+
 class ReviewWindow(ctk.CTkToplevel):
     def __init__(
         self,
@@ -109,12 +122,11 @@ class ReviewWindow(ctk.CTkToplevel):
             text=f"Paire {self.index + 1} / {len(self.pairs)} · score {res.score:.0%}{tag}"
         )
         for (title, labels), rec, other in ((self.cards[0], a, b), (self.cards[1], b, a)):
-            title.configure(text=f"Ligne {rec.row} du fichier")
+            title.configure(text=rec.extra.get("_label") or f"Ligne {rec.row} du fichier")
             for key, _ in FIELDS:
-                differs = getattr(rec, key) != getattr(other, key)
                 labels[key].configure(
                     text=self._raw(rec, key),
-                    text_color=DIFF_COLOR if differs else SAME_COLOR,
+                    text_color=DIFF_COLOR if _differs(rec, other, key) else SAME_COLOR,
                 )
         self.reasons.configure(state="normal")
         self.reasons.delete("1.0", "end")

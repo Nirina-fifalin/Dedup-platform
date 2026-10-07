@@ -2,6 +2,7 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import combinations
+from typing import Any
 
 from .matching import Classification, Matcher, MatchResult
 from .models import NormalizedRecord
@@ -41,7 +42,7 @@ def _build(n: int, uf: _UnionFind, candidates: list[tuple[int, int, MatchResult]
     return DedupResult(person_of, dict(clusters), review)
 
 
-def _blocking_keys(r: NormalizedRecord) -> set[tuple]:
+def _blocking_keys(r: Any) -> set[tuple]:
     keys: set[tuple] = set()
     for e in r.emails:
         keys.add(("email", e))
