@@ -47,3 +47,11 @@ def test_apply_same_merges_confirmed_pair_and_clears_review():
     assert len(final.clusters) == 2
     assert final.person_of[2] == final.person_of[3]
     assert final.review == []
+
+
+def test_two_emails_in_one_cell_link_rows_sharing_one_of_them():
+    res = run([
+        dict(nom="Rakoto", prenom="Jean", email="a@x.mg / b@y.mg", telephone="0341234567"),
+        dict(nom="Rakoto", prenom="Jean", email="b@y.mg", telephone="0341234567"),
+    ])
+    assert len(res.clusters) == 1

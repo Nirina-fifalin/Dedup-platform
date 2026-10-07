@@ -43,10 +43,10 @@ def _build(n: int, uf: _UnionFind, candidates: list[tuple[int, int, MatchResult]
 
 def _blocking_keys(r: NormalizedRecord) -> set[tuple]:
     keys: set[tuple] = set()
-    if r.email:
-        keys.add(("email", r.email))
-    if r.telephone:
-        keys.add(("tel", r.telephone))
+    for e in r.emails:
+        keys.add(("email", e))
+    for p in r.phones:
+        keys.add(("tel", p))
     if r.nom and r.prenom:
         # insensible à l'ordre nom/prénom, tolère une faute après le 3e caractère
         keys.add(("nom", *sorted((r.nom[:3], r.prenom[:3]))))
@@ -68,7 +68,7 @@ def deduplicate(records: list[NormalizedRecord], matcher: Matcher | None = None)
     uf = _UnionFind(len(records))
     probable: list[tuple[int, int, MatchResult]] = []
     for i, j in sorted(pairs):
-        res = matcher.compare(records[i], records[j])
+        res = matcher.compare_multi(records[i], records[j])
         if res.classification == Classification.CERTAIN:
             uf.union(i, j)
         elif res.classification == Classification.PROBABLE:

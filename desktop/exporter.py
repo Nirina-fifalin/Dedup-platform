@@ -26,17 +26,19 @@ def _raw(rec: NormalizedRecord, mapping: dict[str, str], key: str) -> str | None
 def _collect_emails(recs: list[NormalizedRecord]) -> list[str]:
     out: list[str] = []
     for r in recs:
-        # une simple faute de frappe (gmial.com) n'est pas un nouvel email
-        if r.email and all((compare_email(r.email, e) or 0) < EMAIL_SIMILAR for e in out):
-            out.append(r.email)
+        for e in r.emails:
+            # une simple faute de frappe (gmial.com) n'est pas un nouvel email
+            if all((compare_email(e, o) or 0) < EMAIL_SIMILAR for o in out):
+                out.append(e)
     return out
 
 
 def _collect_phones(recs: list[NormalizedRecord]) -> list[str]:
     out: list[str] = []
     for r in recs:
-        if r.telephone and all(phone_distance(r.telephone, p) == 2 for p in out):
-            out.append(r.telephone)
+        for p in r.phones:
+            if all(phone_distance(p, o) == 2 for o in out):
+                out.append(p)
     return out
 
 
@@ -50,7 +52,7 @@ def export_workbook(
     headers = list(records[0].raw.keys()) if records else []
     wb = Workbook(write_only=True)
 
-    # --- inscriptions : toutes les lignes, toutes les colonnes d'origine
+    # --- inscriptions : toutes les lignes, toutes les colonnes d'origine, intactes
     ws = wb.create_sheet("inscriptions")
     ws.append(["id_personne", "inscription_en_double", "email_normalise",
                "telephone_normalise", *headers])
@@ -63,7 +65,7 @@ def export_workbook(
             key = (pid, normalize_name(formation))
             duplicate = "oui" if key in seen else ""
             seen.add(key)
-        ws.append([pid, duplicate, rec.email, rec.telephone,
+        ws.append([pid, duplicate, " | ".join(rec.emails), " | ".join(rec.phones),
                    *[_cell(rec.raw.get(h)) for h in headers]])
 
     # --- personnes : une ligne par personne, avec toutes ses valeurs
@@ -92,15 +94,11 @@ def export_workbook(
         ws.append([records[i].row, records[j].row, final.person_of[i], final.person_of[j],
                    round(res.score, 2), " ; ".join(res.reasons)])
 
-    # --- corrections : normalisations et problèmes de données
-    ws = wb.create_sheet("corrections")
-    ws.append(["ligne", "champ", "type", "valeur_originale", "valeur_normalisee", "detail"])
+    # --- problemes : uniquement ce qui mérite ton attention (aucune donnée n'est modifiée)
+    ws = wb.create_sheet("problemes")
+    ws.append(["ligne", "champ", "code", "detail"])
     for rec in records:
-        for c in rec.corrections:
-            if c.normalized is not None and c.original.strip().casefold() == c.normalized:
-                continue   # simple changement de casse ou d'espaces : pas la peine
-            ws.append([c.row, c.field, "correction", _cell(c.original), _cell(c.normalized), None])
         for issue in rec.issues:
-            ws.append([issue.row, issue.field, "probleme", None, None, _cell(issue.message)])
+            ws.append([issue.row, issue.field, issue.code, _cell(issue.message)])
 
     wb.save(path)

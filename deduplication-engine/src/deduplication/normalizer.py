@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .models import Correction, Issue, NormalizedRecord
 from .normalization import (
-    NameConfig, normalize_email, normalize_name, normalize_phone,
+    NameConfig, normalize_email, normalize_name, normalize_phone, split_emails, split_phones,
 )
 
 IDENTITY_FIELDS = ("nom", "prenom", "email", "telephone")
@@ -30,6 +30,14 @@ def _clean(value):
         value = value.strip()
         return value or None
     return value
+
+
+def _email_problem(text: str) -> str:
+    if "@" not in text:
+        return f"Email invalide (pas de @) : {text!r}"
+    if "." not in text.rsplit("@", 1)[1]:
+        return f"Email invalide (domaine incomplet, point manquant) : {text!r}"
+    return f"Email invalide : {text!r}"
 
 
 class RecordNormalizer:
@@ -78,7 +86,7 @@ class RecordNormalizer:
             if raw is not None and str(raw) != (norm or ""):
                 corrections.append(Correction(n, name, str(raw), norm))
 
-        # Noms
+        # Noms : la forme normalisée ne sert qu'à comparer, la valeur d'origine reste intacte
         nom_raw, prenom_raw = get("nom"), get("prenom")
         nom = normalize_name(nom_raw, self.name_config)
         prenom = normalize_name(prenom_raw, self.name_config)
@@ -87,29 +95,55 @@ class RecordNormalizer:
         if not nom or not prenom:
             issues.append(Issue(n, "nom/prenom", "name_missing", "Nom ou prénom manquant"))
 
-        # Email : on ne garde que les emails valides, on signale les domaines suspects
-        e = normalize_email(get("email"))
-        email = e.normalized if e.is_valid else None
-        if e.raw is not None and not e.is_valid:
-            issues.append(Issue(n, "email", "email_invalid", f"Email invalide : {e.raw!r}"))
-        elif e.suspected_domain:
+        # Emails : une cellule peut en contenir plusieurs ; on garde les valides, on signale le reste
+        emails: list[str] = []
+        email_cell = get("email")
+        if email_cell is not None and "@" not in str(email_cell):
+            # du texte sans @ : un seul problème pour toute la cellule (pas un par mot)
+            issues.append(Issue(n, "email", "email_invalid", _email_problem(str(email_cell))))
+            email_parts: list[str] = []
+        else:
+            email_parts = split_emails(email_cell)
+        for part in email_parts:
+            e = normalize_email(part)
+            if not (e.is_valid and e.normalized):
+                issues.append(Issue(n, "email", "email_invalid", _email_problem(part)))
+                continue
+            if e.suspected_domain:
+                issues.append(Issue(
+                    n, "email", "email_suspected_domain",
+                    f"Domaine {e.domain!r} proche de {e.suspected_domain!r} (non corrigé)",
+                ))
+            track("email", e.raw, e.normalized)
+            if e.normalized not in emails:
+                emails.append(e.normalized)
+        if len(emails) > 1:
             issues.append(Issue(
-                n, "email", "email_suspected_domain",
-                f"Domaine {e.domain!r} proche de {e.suspected_domain!r} (non corrigé)",
+                n, "email", "email_multiple",
+                f"{len(emails)} emails dans la même cellule : tous conservés",
             ))
-        if e.is_valid:
-            track("email", e.raw, email)
 
-        # Téléphone
-        p = normalize_phone(get("telephone"), self.default_region)
-        if p.raw is not None and p.normalized is None:
-            issues.append(Issue(n, "telephone", "phone_invalid", f"Téléphone invalide : {p.raw!r}"))
-        elif p.normalized and not p.is_valid:
-            issues.append(Issue(n, "telephone", "phone_unverified", f"Numéro peu plausible : {p.raw!r}"))
-        if p.normalized:
+        # Téléphones : idem. Un numéro peu plausible est signalé mais n'est PAS utilisé :
+        # on ne devine jamais un indicatif (il reste tel que saisi dans la ligne d'origine)
+        phones: list[str] = []
+        for part in split_phones(get("telephone")):
+            p = normalize_phone(part, self.default_region)
+            if p.normalized is None:
+                issues.append(Issue(n, "telephone", "phone_invalid", f"Téléphone invalide : {p.raw!r}"))
+                continue
+            if not p.is_valid:
+                issues.append(Issue(n, "telephone", "phone_unverified", f"Numéro peu plausible : {p.raw!r}"))
+                continue
             track("telephone", p.raw, p.normalized)
+            if p.normalized not in phones:
+                phones.append(p.normalized)
+        if len(phones) > 1:
+            issues.append(Issue(
+                n, "telephone", "phone_multiple",
+                f"{len(phones)} téléphones dans la même cellule : tous conservés",
+            ))
 
-        if email is None and p.normalized is None:
+        if not emails and not phones:
             issues.append(Issue(n, "contact", "no_contact", "Ni email ni téléphone exploitable"))
 
         extra = {
@@ -118,6 +152,9 @@ class RecordNormalizer:
         }
 
         return NormalizedRecord(
-            row=n, nom=nom, prenom=prenom, email=email, telephone=p.normalized,
+            row=n, nom=nom, prenom=prenom,
+            email=emails[0] if emails else None,
+            telephone=phones[0] if phones else None,
             extra=extra, raw=dict(row), corrections=corrections, issues=issues,
+            emails=emails, phones=phones,
         )

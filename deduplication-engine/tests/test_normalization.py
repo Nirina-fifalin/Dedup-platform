@@ -2,6 +2,7 @@ import pytest
 from deduplication.normalization import (
     normalize_email, normalize_name, normalize_phone,
 )
+from deduplication.normalization.split import split_phones
 
 
 @pytest.mark.parametrize("raw", [" Jean Rakoto ", "JEAN RAKOTO", "Jean  Rakoto", "Jean-Rakoto"])
@@ -34,4 +35,14 @@ def test_phone_formats_converge(raw):
 
 def test_phone_empty():
     assert normalize_phone("").normalized is None
-    
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("0376491452/0346077875", 2),
+    ("0348112216/ 0333204104", 2),
+    ("0325462265 - 0322982022", 2),
+    ("034 12 345 67", 1),
+    ("+261 34 12 345 67", 1),
+])
+def test_split_phones(raw, expected):
+    assert len(split_phones(raw)) == expected

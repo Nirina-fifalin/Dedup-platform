@@ -30,6 +30,8 @@ class NormalizedRecord:
     raw: dict = field(default_factory=dict)                     # ligne d'origine, intacte
     corrections: list[Correction] = field(default_factory=list)
     issues: list[Issue] = field(default_factory=list)
+    emails: list[str] = field(default_factory=list)   # tous les emails valides de la ligne
+    phones: list[str] = field(default_factory=list)   # tous les téléphones (E.164)
 
 
 @dataclass

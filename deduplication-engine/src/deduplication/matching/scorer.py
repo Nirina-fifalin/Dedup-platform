@@ -151,3 +151,24 @@ class Matcher:
                     best = res
         assert best is not None
         return best
+
+    def compare_multi(self, a, b) -> MatchResult:
+        """Compare deux enregistrements pouvant avoir plusieurs emails/téléphones.
+
+        On teste chaque combinaison et on garde la meilleure : un email en commun
+        suffit, même si la cellule en contient un autre.
+        """
+        emails_a, phones_a = list(a.emails) or [None], list(a.phones) or [None]
+        emails_b, phones_b = list(b.emails) or [None], list(b.phones) or [None]
+        best: MatchResult | None = None
+        for ea in emails_a:
+            for pa in phones_a:
+                va = SimpleNamespace(nom=a.nom, prenom=a.prenom, email=ea, telephone=pa, extra=a.extra)
+                for eb in emails_b:
+                    for pb in phones_b:
+                        vb = SimpleNamespace(nom=b.nom, prenom=b.prenom, email=eb, telephone=pb, extra=b.extra)
+                        res = self.compare(va, vb)
+                        if best is None or _rank(res) > _rank(best):
+                            best = res
+        assert best is not None
+        return best
