@@ -2,6 +2,7 @@ import json
 
 import pytest
 from deduplication import ColumnMapping, RecordNormalizer, apply_same, deduplicate
+from contextlib import closing
 
 import store
 
@@ -142,3 +143,44 @@ def test_replacing_keeps_persons_with_other_registrations_and_rebuilds_contacts(
     assert store.stats(conn) == (1, 2, 2)
     emails = {r[0] for r in conn.execute("SELECT email FROM person_emails WHERE person_id = ?", (jean.id,))}
     assert emails == {"b@x.mg", "a2@x.mg"}
+
+
+def test_removal_preview_and_delete_file_keep_shared_persons(conn, tmp_path):
+    jean_a = {"Last": "Rakoto", "First": "Jean", "Mail": "a@x.mg", "Tel": "0341234567", "Training": "Excel"}
+    marie = {"Last": "Rasoa", "First": "Marie", "Mail": "m@x.mg", "Tel": "0329876543", "Training": "IA"}
+    a = _save(conn, tmp_path, "a.csv", [jean_a, marie])
+    jean = next(k for k in store.load_known(conn) if k.nom == "rakoto")
+    _save(conn, tmp_path, "b.csv", [{**jean_a, "Mail": "b@x.mg", "Training": "Python"}],
+          attach={1: jean.id})
+
+    preview = store.removal_preview(conn, a.source_file_id)
+    assert (preview.registrations, preview.persons_deleted, preview.persons_kept) == (2, 1, 1)
+
+    store.delete_file(conn, a.source_file_id)
+    assert store.stats(conn) == (1, 1, 1)         # Marie supprimée ; Jean gardé, avec l'inscription de b.csv
+    assert [r[0] for r in conn.execute("SELECT email FROM person_emails")] == ["b@x.mg"]
+    assert conn.execute("SELECT action FROM audit_log").fetchone()[0] == "suppression_fichier"
+
+
+def test_auto_backup_and_restore_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "data" / "h.db")
+    monkeypatch.setattr(store, "BACKUP_DIR", tmp_path / "data" / "sauvegardes")
+    f = tmp_path / "f.csv"
+    f.write_text("x", encoding="utf-8")
+    records, final = analysis(same=[(0, 1)])
+    with closing(store.connect()) as conn:
+        store.save_analysis(conn, f, records, final, MAPPING)
+
+    backup = store.auto_backup("test")
+    assert store.backup_info(backup) == (2, 3, 1)
+
+    with closing(store.connect()) as conn:
+        store.delete_file(conn, 1)
+        assert store.stats(conn) == (0, 0, 0)
+
+    safety = store.restore_from(backup)
+    assert store.backup_info(safety) == (0, 0, 0)         # l'état d'avant la restauration est conservé
+    with closing(store.connect()) as conn:
+        assert store.stats(conn) == (2, 3, 1)
+        actions = [r[0] for r in conn.execute("SELECT action FROM audit_log ORDER BY id")]
+    assert actions == ["suppression_fichier", "restauration"]   # le journal survit à la restauration

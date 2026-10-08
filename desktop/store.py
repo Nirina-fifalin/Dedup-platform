@@ -14,6 +14,9 @@ from exporter import EMAIL_SIMILAR, _collect_emails, _collect_phones, _raw
 
 DB_PATH = Path(__file__).with_name("data") / "historique.db"
 
+BACKUP_DIR = DB_PATH.parent / "sauvegardes"
+KEEP_BACKUPS = 15
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_files (
     id INTEGER PRIMARY KEY,
@@ -55,6 +58,12 @@ CREATE TABLE IF NOT EXISTS registrations (
     telephone_saisi TEXT,
     raw TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY,
+    at TEXT NOT NULL,
+    action TEXT NOT NULL,
+    detail TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS ix_emails_email ON person_emails(email);
 CREATE INDEX IF NOT EXISTS ix_phones_phone ON person_phones(phone);
 CREATE INDEX IF NOT EXISTS ix_persons_norm ON persons(nom_norm, prenom_norm);
@@ -75,7 +84,8 @@ class SaveReport:
     registrations: int
 
 
-def connect(path: Path = DB_PATH) -> sqlite3.Connection:
+def connect(path: Path | None = None) -> sqlite3.Connection:
+    path = path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
@@ -258,7 +268,7 @@ def remove_file_versions(conn: sqlite3.Connection, file_ids: list[int]) -> None:
             conn.execute("DELETE FROM persons WHERE id = ?", (pid,))
 
 
-def backup_to(target: Path, source: Path = DB_PATH) -> None:
+def backup_to(target: Path, source: Path | None = None) -> None:
     """Copie cohérente de la base (sûre même si elle vient d'être modifiée)."""
     with closing(connect(source)) as src:
         dest = sqlite3.connect(target)
@@ -358,3 +368,114 @@ def person_registrations(conn: sqlite3.Connection, person_id: int) -> list[tuple
         """,
         (person_id,),
     ).fetchall()
+
+
+def log_action(conn: sqlite3.Connection, action: str, detail: str) -> None:
+    """Journal des opérations sensibles. Jamais de données personnelles dans `detail`."""
+    conn.execute(
+        "INSERT INTO audit_log (at, action, detail) VALUES (?, ?, ?)", (_now(), action, detail)
+    )
+
+
+@dataclass
+class RemovalPreview:
+    file_id: int
+    filename: str
+    registrations: int
+    persons_deleted: int     # personnes qui n'existent que par ce fichier
+    persons_kept: int        # personnes qui ont aussi des inscriptions ailleurs
+
+
+def removal_preview(conn: sqlite3.Connection, file_id: int) -> RemovalPreview:
+    row = conn.execute("SELECT filename FROM source_files WHERE id = ?", (file_id,)).fetchone()
+    if row is None:
+        raise LookupError("Fichier introuvable")
+    registrations = conn.execute(
+        "SELECT count(*) FROM registrations WHERE source_file_id = ?", (file_id,)
+    ).fetchone()[0]
+    in_file = conn.execute(
+        "SELECT count(DISTINCT person_id) FROM registrations WHERE source_file_id = ?", (file_id,)
+    ).fetchone()[0]
+    only_here = conn.execute(
+        "SELECT count(DISTINCT r.person_id) FROM registrations r WHERE r.source_file_id = ? "
+        "AND NOT EXISTS (SELECT 1 FROM registrations o "
+        "WHERE o.person_id = r.person_id AND o.source_file_id != ?)",
+        (file_id, file_id),
+    ).fetchone()[0]
+    return RemovalPreview(file_id, row[0], registrations, only_here, in_file - only_here)
+
+
+def list_files(conn: sqlite3.Connection) -> list[tuple[str, RemovalPreview]]:
+    """Fichiers enregistrés, du plus récent au plus ancien : (date d'enregistrement, aperçu)."""
+    return [
+        (imported_at, removal_preview(conn, file_id))
+        for file_id, imported_at in conn.execute(
+            "SELECT id, imported_at FROM source_files ORDER BY id DESC"
+        ).fetchall()
+    ]
+
+
+def delete_file(conn: sqlite3.Connection, file_id: int) -> RemovalPreview:
+    """Supprime un fichier importé et ses inscriptions (tout ou rien), et le note au journal."""
+    preview = removal_preview(conn, file_id)
+    with conn:
+        remove_file_versions(conn, [file_id])
+        log_action(
+            conn, "suppression_fichier",
+            f"{preview.filename} : {preview.registrations} inscriptions, "
+            f"{preview.persons_deleted} personnes supprimées, {preview.persons_kept} conservées",
+        )
+    return preview
+
+
+def auto_backup(reason: str) -> Path:
+    """Sauvegarde automatique datée dans le dossier « sauvegardes » ; on garde les plus récentes."""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    target = BACKUP_DIR / f"{datetime.now():%Y%m%d-%H%M%S}-{reason}.db"
+    backup_to(target)
+    for old in sorted(BACKUP_DIR.glob("????????-??????-*.db"))[:-KEEP_BACKUPS]:
+        old.unlink(missing_ok=True)
+    return target
+
+
+def _open_readonly(path: Path) -> sqlite3.Connection:
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+
+
+def backup_info(path: Path) -> tuple[int, int, int]:
+    """(personnes, inscriptions, fichiers) d'une sauvegarde. ValueError si ce n'est pas une base valide."""
+    try:
+        src = _open_readonly(path)
+        try:
+            return stats(src)
+        finally:
+            src.close()
+    except sqlite3.Error as e:
+        raise ValueError("Ce fichier n'est pas une sauvegarde de cette application.") from e
+
+
+def restore_from(path: Path) -> Path:
+    """Remplace la base par une sauvegarde. Retourne la sauvegarde de sécurité faite juste avant.
+    Le journal est conservé."""
+    if path.resolve() == (DB_PATH).resolve():
+        raise ValueError("Ce fichier est la base actuelle.")
+    backup_info(path)                                   # vérifie que c'est une base valide
+    with closing(connect()) as current:
+        journal = current.execute("SELECT at, action, detail FROM audit_log").fetchall()
+    safety = auto_backup("avant-restauration")
+    src = _open_readonly(path)
+    try:
+        with closing(connect()) as dest:
+            src.backup(dest)
+    finally:
+        src.close()
+    with closing(connect()) as conn:                    # remet le schéma à jour si la sauvegarde est ancienne
+        with conn:
+            for at, action, detail in journal:
+                conn.execute(
+                    "INSERT INTO audit_log (at, action, detail) SELECT ?, ?, ? WHERE NOT EXISTS "
+                    "(SELECT 1 FROM audit_log WHERE at = ? AND action = ? AND detail = ?)",
+                    (at, action, detail, at, action, detail),
+                )
+            log_action(conn, "restauration", path.name)
+    return safety

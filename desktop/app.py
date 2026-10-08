@@ -12,6 +12,7 @@ from deduplication import (
     Classification, ColumnMapping, DedupResult, GroupMatch, KnownIndex, KnownPerson,
     MatchResult, NormalizedRecord, RecordNormalizer, apply_same, deduplicate, match_to_known,
 )
+from tkinterdnd2 import DND_FILES, TkinterDnD
 
 import store
 from browse_window import BrowseWindow
@@ -26,6 +27,7 @@ ctk.set_default_color_theme("blue")
 
 OUTLINE = {"fg_color": "transparent", "border_width": 1, "text_color": ("gray10", "gray90")}
 ACCENT = ("#1f6aa5", "#6fb3e8")
+ZONE_BORDER = ("gray70", "gray35")
 
 ISSUE_LABELS = {
     "email_invalid": "adresse email incorrecte (non utilisée)",
@@ -57,9 +59,10 @@ def _fmt_date(iso: str) -> str:
         return iso[:10]
 
 
-class App(ctk.CTk):
+class App(ctk.CTk, TkinterDnD.DnDWrapper):
     def __init__(self):
         super().__init__()
+        self.dnd_ok = self._enable_drop()
         self.title("Déduplication des inscriptions")
         self.geometry("1000x720")
         self.minsize(900, 640)
@@ -68,6 +71,7 @@ class App(ctk.CTk):
 
         self._queue: queue.Queue = queue.Queue()
         self._path: Path | None = None
+        self._analyzing = False
         self._review_win: ReviewWindow | None = None
         self._known_win: ReviewWindow | None = None
         self._browse_win: BrowseWindow | None = None
@@ -98,6 +102,58 @@ class App(ctk.CTk):
         self._update_db_label()
         self._reset_view()
 
+    # ------------------------------------------------------------------ glisser-déposer
+    def _enable_drop(self) -> bool:
+        """Active le dépôt de fichiers sur la fenêtre. Sinon, le bouton « Parcourir » reste disponible."""
+        try:
+            self.TkdndVersion = TkinterDnD._require(self)
+            self.drop_target_register(DND_FILES)
+            self.dnd_bind("<<Drop>>", self._on_drop)
+            self.dnd_bind("<<DropEnter>>", self._drop_enter)
+            self.dnd_bind("<<DropLeave>>", self._drop_leave)
+        except Exception:
+            return False
+        return True
+
+    def _drop_enter(self, event):
+        self.zone.configure(border_color=ACCENT)
+        return event.action
+
+    def _drop_leave(self, event):
+        self.zone.configure(border_color=ZONE_BORDER)
+        return event.action
+
+    def _on_drop(self, event):
+        self._drop_leave(event)
+        if not self._analyzing:
+            # on traite le dépôt après coup : une boîte de dialogue dans ce rappel bloquerait l'Explorateur
+            self.after(50, self._handle_drop, list(self.tk.splitlist(event.data)))
+        return event.action
+
+    def _handle_drop(self, raw_paths: list[str]):
+        if len(raw_paths) != 1:
+            messagebox.showwarning("Un seul fichier", "Déposez un seul fichier à la fois.")
+            return
+        self._accept_file(Path(raw_paths[0]))
+
+    def _accept_file(self, path: Path):
+        suffix = path.suffix.lower()
+        if path.is_dir():
+            messagebox.showwarning("Dossier", "Déposez un fichier, pas un dossier.")
+        elif suffix == ".xls":
+            messagebox.showwarning(
+                "Format non géré",
+                "Ce fichier est au format .xls (ancien Excel).\n"
+                "Ouvrez-le dans Excel, enregistrez-le en .xlsx, puis déposez-le de nouveau.",
+            )
+        elif suffix not in (".xlsx", ".csv"):
+            messagebox.showwarning(
+                "Format non géré",
+                f"Ce fichier ({suffix or 'sans extension'}) n'est ni un Excel (.xlsx) ni un CSV.",
+            )
+        else:
+            self._set_file(path)
+
     # ------------------------------------------------------------------ construction
     def _build_header(self):
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -115,28 +171,45 @@ class App(ctk.CTk):
             side="left", padx=(0, 8)
         )
         ctk.CTkButton(tools, text="Sauvegarder la base", command=self.backup_db, **OUTLINE).pack(
-            side="left"
+            side="left", padx=(0, 8)
         )
+        ctk.CTkButton(tools, text="Restaurer…", command=self.restore_db, **OUTLINE).pack(side="left")
         self.hint = ctk.CTkLabel(
             self, text="", anchor="w", font=ctk.CTkFont(size=14), text_color=ACCENT
         )
         self.hint.grid(row=1, column=0, padx=24, pady=(10, 8), sticky="ew")
 
     def _build_file_panel(self):
-        panel = ctk.CTkFrame(self)
-        panel.grid(row=2, column=0, padx=24, pady=(0, 12), sticky="ew")
-        panel.grid_columnconfigure(0, weight=1)
-        self.file_label = ctk.CTkLabel(
-            panel, text="Aucun fichier choisi", anchor="w", font=ctk.CTkFont(size=14)
-        )
-        self.file_label.grid(row=0, column=0, padx=16, pady=14, sticky="ew")
-        self.choose_btn = ctk.CTkButton(panel, text="Choisir un fichier…", width=170, command=self.choose_file)
-        self.choose_btn.grid(row=0, column=1, padx=(0, 8), pady=14)
-        self.run_btn = ctk.CTkButton(panel, text="Analyser", width=130, command=self.run, state="disabled")
-        self.run_btn.grid(row=0, column=2, padx=(0, 16), pady=14)
-        self.progress = ctk.CTkProgressBar(panel, mode="indeterminate")
-        self.progress.grid(row=1, column=0, columnspan=3, padx=16, pady=(0, 12), sticky="ew")
+        self.zone = ctk.CTkFrame(self, corner_radius=12, border_width=2, border_color=ZONE_BORDER)
+        self.zone.grid(row=2, column=0, padx=24, pady=(0, 12), sticky="ew")
+        self.zone.grid_columnconfigure(0, weight=1)
+        self.zone_title = ctk.CTkLabel(self.zone, text="", font=ctk.CTkFont(size=17, weight="bold"))
+        self.zone_title.grid(row=0, column=0, padx=16, pady=(20, 2))
+        self.zone_sub = ctk.CTkLabel(self.zone, text="", text_color="gray")
+        self.zone_sub.grid(row=1, column=0, padx=16)
+        buttons = ctk.CTkFrame(self.zone, fg_color="transparent")
+        buttons.grid(row=2, column=0, pady=(12, 16))
+        self.choose_btn = ctk.CTkButton(buttons, text="Parcourir…", width=190, command=self.choose_file)
+        self.choose_btn.pack(side="left", padx=(0, 8))
+        self.run_btn = ctk.CTkButton(buttons, text="Analyser", width=130, command=self.run, state="disabled")
+        self.run_btn.pack(side="left")
+        self.progress = ctk.CTkProgressBar(self.zone, mode="indeterminate")
+        self.progress.grid(row=3, column=0, padx=16, pady=(0, 14), sticky="ew")
         self.progress.grid_remove()
+        self._show_zone()
+
+    def _show_zone(self):
+        how = "déposez-le ici ou cliquez sur « Parcourir »" if self.dnd_ok else "cliquez sur « Parcourir »"
+        if self._path is None:
+            self.zone_title.configure(
+                text="Déposez votre fichier ici" if self.dnd_ok else "Choisissez votre fichier"
+            )
+            self.zone_sub.configure(text=f"Excel (.xlsx) ou CSV — {how}")
+            self.choose_btn.configure(text="Parcourir…")
+        else:
+            self.zone_title.configure(text=self._path.name)
+            self.zone_sub.configure(text="Prêt à analyser — pour changer de fichier : " + how)
+            self.choose_btn.configure(text="Choisir un autre fichier…")
 
     def _build_results(self):
         self.placeholder = ctk.CTkLabel(
@@ -222,9 +295,17 @@ class App(ctk.CTk):
         else:
             self.hint.configure(text="Étape 2 sur 3 — Cliquez sur « Analyser ».")
 
+    def _clear_analysis(self):
+        self.records, self.result, self.final, self.index = None, None, None, None
+        self.decisions, self.known_decisions, self.known_cache = {}, {}, {}
+        self.pending_cases, self.known_pairs, self.matches = [], [], {}
+        self.replace_ids, self.replace_note = [], ""
+        self.saved = False
+        self._reset_view()
+
     def _busy(self, busy: bool):
-        state = "disabled" if busy else "normal"
-        self.choose_btn.configure(state=state)
+        self._analyzing = busy
+        self.choose_btn.configure(state="disabled" if busy else "normal")
         self.run_btn.configure(state="disabled" if busy or self._path is None else "normal")
         if busy:
             self.export_btn.configure(state="disabled")
@@ -242,17 +323,14 @@ class App(ctk.CTk):
             title="Choisir un fichier d'inscriptions",
             filetypes=[("Excel ou CSV", "*.xlsx *.csv")],
         )
-        if not path:
-            return
-        self._path = Path(path)
-        self.file_label.configure(text=self._path.name)
+        if path:
+            self._accept_file(Path(path))
+
+    def _set_file(self, path: Path):
+        self._path = path
+        self._clear_analysis()
+        self._show_zone()
         self.run_btn.configure(state="normal")
-        self.records, self.result, self.final, self.index = None, None, None, None
-        self.decisions, self.known_decisions, self.known_cache = {}, {}, {}
-        self.pending_cases, self.known_pairs, self.matches = [], [], {}
-        self.replace_ids, self.replace_note = [], ""
-        self.saved = False
-        self._reset_view()
 
     def run(self):
         if self._path is None:
@@ -376,9 +454,9 @@ class App(ctk.CTk):
         if self._browse_win is not None and self._browse_win.winfo_exists():
             self._browse_win.lift()
             return
-        self._browse_win = BrowseWindow(self)
+        self._browse_win = BrowseWindow(self, on_change=self._update_db_label)
 
-    # ------------------------------------------------------------------ export, sauvegarde, enregistrement
+    # ------------------------------------------------------------------ export, sauvegarde, restauration, enregistrement
     def export(self):
         if self.records is None or self.final is None or self._path is None:
             return
@@ -419,6 +497,45 @@ class App(ctk.CTk):
             "Sauvegarde terminée",
             f"La base a été copiée dans :\n{target}\n\n"
             "Garde ce fichier en lieu sûr : il contient des données personnelles.",
+        )
+
+    def restore_db(self):
+        start = store.BACKUP_DIR if store.BACKUP_DIR.exists() else Path.home()
+        path = filedialog.askopenfilename(
+            title="Choisir la sauvegarde à restaurer", initialdir=str(start),
+            filetypes=[("Sauvegarde de la base", "*.db")],
+        )
+        if not path:
+            return
+        chosen = Path(path)
+        try:
+            theirs = store.backup_info(chosen)
+            with closing(store.connect()) as conn:
+                ours = store.stats(conn)
+        except (ValueError, sqlite3.Error) as e:
+            messagebox.showerror("Restauration impossible", str(e))
+            return
+        if not messagebox.askyesno(
+            "Restaurer une sauvegarde",
+            f"Remplacer la base actuelle\n   ({ours[0]} personnes · {ours[1]} inscriptions · "
+            f"{ours[2]} fichier(s))\n\npar cette sauvegarde\n   ({theirs[0]} personnes · "
+            f"{theirs[1]} inscriptions · {theirs[2]} fichier(s)) ?\n\n"
+            "L'état actuel est sauvegardé automatiquement avant, dans le dossier « sauvegardes ».",
+        ):
+            return
+        try:
+            safety = store.restore_from(chosen)
+        except Exception as e:
+            messagebox.showerror("Restauration impossible", str(e))
+            return
+        if self._browse_win is not None and self._browse_win.winfo_exists():
+            self._browse_win.destroy()
+        self._clear_analysis()
+        self._update_db_label()
+        messagebox.showinfo(
+            "Base restaurée",
+            f"La base a été remplacée par la sauvegarde.\n\n"
+            f"L'état précédent est conservé dans « sauvegardes » : {safety.name}",
         )
 
     def _attach(self) -> dict[int, int]:
@@ -465,6 +582,8 @@ class App(ctk.CTk):
         if not messagebox.askyesno("Enregistrer dans la base", message):
             return
         try:
+            if self.replace_ids:
+                store.auto_backup("avant-remplacement")
             with closing(store.connect()) as conn:
                 report = store.save_analysis(
                     conn, self._path, records, final, self.mapping, attach, self.replace_ids

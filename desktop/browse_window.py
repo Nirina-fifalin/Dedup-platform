@@ -6,6 +6,9 @@ from tkinter import filedialog, messagebox, ttk
 import customtkinter as ctk
 from deduplication.normalization import normalize_name
 from openpyxl import Workbook
+from collections.abc import Callable
+
+from files_window import FilesWindow
 
 import store
 
@@ -47,8 +50,9 @@ def _matches(query: str, text: str, digits: str) -> bool:
 
 
 class BrowseWindow(ctk.CTkToplevel):
-    def __init__(self, master):
+    def __init__(self, master, on_change: Callable[[], None] | None = None):
         super().__init__(master)
+        self.on_change = on_change
         self.title("Base des personnes")
         self.geometry("1020x660")
         self.minsize(860, 540)
@@ -80,8 +84,12 @@ class BrowseWindow(ctk.CTkToplevel):
         entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         self.count = ctk.CTkLabel(bar, text="", text_color="gray")
         self.count.grid(row=0, column=1, padx=(0, 10))
+        ctk.CTkButton(
+            bar, text="Fichiers importés…", width=150, command=self._open_files,
+            fg_color="transparent", border_width=1, text_color=("gray10", "gray90"),
+        ).grid(row=0, column=2, padx=(0, 10))
         ctk.CTkButton(bar, text="Exporter la liste…", width=140, command=self._export).grid(
-            row=0, column=2
+            row=0, column=3
         )
 
         self.tree = self._table(1, COLUMNS, sortable=True, height=14)
@@ -190,6 +198,15 @@ class BrowseWindow(ctk.CTkToplevel):
         self.detail.delete(*self.detail.get_children())
         for r in registrations:
             self.detail.insert("", "end", values=r)
+
+    def _open_files(self):
+        FilesWindow(self, on_change=self._data_changed)
+
+    def _data_changed(self):
+        if self._load():
+            self._apply()
+        if self.on_change:
+            self.on_change()
 
     # --- Export
     def _export(self):
