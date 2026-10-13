@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from deduplication.normalization import normalize_name
+from paths import data_dir
 
 SYNONYMS = {
     "nom": {"nom", "nom de famille", "last name", "lastname", "surname", "family name"},
@@ -16,7 +17,7 @@ SYNONYMS = {
                   "name of training", "nom de la formation", "intitule de la formation"},    
 }
 
-_STORE = Path(__file__).with_name("column_mappings.json")
+_STORE = data_dir() / "column_mappings.json"
 
 
 def guess_mapping(headers) -> dict[str, str]:
@@ -61,6 +62,7 @@ def save_mapping(headers, mapping: dict[str, str]) -> None:
         data = {}
     data[_signature(headers)] = mapping
     try:
+        _STORE.parent.mkdir(parents=True, exist_ok=True)
         _STORE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
         pass   # ne pas empêcher l'analyse si le dossier est en lecture seule

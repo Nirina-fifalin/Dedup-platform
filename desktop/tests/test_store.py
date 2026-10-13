@@ -1,9 +1,12 @@
 import json
 
 import pytest
+import sqlite3
 from deduplication import ColumnMapping, RecordNormalizer, apply_same, deduplicate
 from contextlib import closing
 
+import journal
+import person_edit
 import store
 
 MAPPING = {"nom": "Last", "prenom": "First", "email": "Mail", "telephone": "Tel",
@@ -184,3 +187,147 @@ def test_auto_backup_and_restore_roundtrip(tmp_path, monkeypatch):
         assert store.stats(conn) == (2, 3, 1)
         actions = [r[0] for r in conn.execute("SELECT action FROM audit_log ORDER BY id")]
     assert actions == ["suppression_fichier", "restauration"]   # le journal survit à la restauration
+
+
+JEAN = {"Last": "Rakoto", "First": "Jean", "Mail": "a@x.mg", "Tel": "0341234567", "Training": "Excel"}
+MARIE = {"Last": "Rasoa", "First": "Marie", "Mail": "m@x.mg", "Tel": "0329876543", "Training": "IA"}
+
+
+def first_person_id(conn) -> int:
+    pid = store.load_known(conn)[0].id
+    assert isinstance(pid, int)
+    return pid
+
+
+def ids_by_name(conn) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for person in store.load_known(conn):
+        assert isinstance(person.id, int)
+        out[person.nom] = person.id
+    return out
+
+
+def test_connect_migrates_an_old_database(tmp_path):
+    path = tmp_path / "old.db"
+    raw = sqlite3.connect(path)
+    raw.executescript(store.SCHEMA)                    # base sans les colonnes de contact (version 1)
+    raw.execute("PRAGMA user_version = 1")
+    raw.execute("INSERT INTO persons (nom, prenom, nom_norm, prenom_norm, created_at) "
+                "VALUES ('A', 'B', 'a', 'b', 'x')")
+    raw.commit()
+    raw.close()
+    with closing(store.connect(path)) as migrated:
+        assert migrated.execute("SELECT contact_status FROM persons").fetchone()[0] == "ok"
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
+
+
+def test_do_not_contact_survives_file_removal_and_reimport(conn, tmp_path):
+    first = _save(conn, tmp_path, "a.csv", [JEAN])
+    pid = first_person_id(conn)
+    store.set_contact_status(conn, pid, True, "Désabonnement")
+    assert [r[0] for r in conn.execute("SELECT email FROM suppressed_emails")] == ["a@x.mg"]
+
+    store.delete_file(conn, first.source_file_id)
+    assert store.stats(conn) == (0, 0, 0)               # la personne a disparu avec son fichier
+
+    _save(conn, tmp_path, "a2.csv", [JEAN])             # réimport
+    assert conn.execute("SELECT contact_status FROM persons").fetchone()[0] == "do_not_contact"
+
+
+def test_delete_person_erases_data_but_keeps_only_the_opt_out_email(conn, tmp_path):
+    _save(conn, tmp_path, "a.csv", [JEAN, MARIE])
+    ids = ids_by_name(conn)
+    store.set_contact_status(conn, ids["rakoto"], True)
+
+    assert store.delete_person(conn, ids["rakoto"]) == 1
+    assert store.delete_person(conn, ids["rasoa"]) == 1
+    assert store.stats(conn)[:2] == (0, 0)
+    assert [r[0] for r in conn.execute("SELECT email FROM suppressed_emails")] == ["a@x.mg"]
+
+
+def test_reauthorizing_contact_clears_the_opposition_entry(conn, tmp_path):
+    _save(conn, tmp_path, "a.csv", [JEAN])
+    pid = first_person_id(conn)
+    store.set_contact_status(conn, pid, True, "Désabonnement")
+    status, at, note = store.contact_info(conn, pid)
+    assert (status, note) == ("do_not_contact", "Désabonnement") and at
+
+    store.set_contact_status(conn, pid, False)
+    assert store.contact_info(conn, pid)[0] == "ok"
+    assert conn.execute("SELECT count(*) FROM suppressed_emails").fetchone()[0] == 0
+
+
+def _person_ids(conn) -> list[int]:
+    ids: list[int] = []
+    for k in store.load_known(conn):
+        assert isinstance(k.id, int)
+        ids.append(k.id)
+    return ids
+
+
+def _only_person(conn) -> int:
+    (only,) = _person_ids(conn)
+    return only
+
+
+def test_parse_contacts_flags_errors_and_suspected_domains():
+    p = person_edit.parse_contacts(
+        "jean@gamil.com\npasunemail\nJean@Gmail.com", "034 12 345 67 / 0329876543\n12"
+    )
+    assert p.emails == ["jean@gamil.com", "jean@gmail.com"]
+    assert p.suspected == [("jean@gamil.com", "gmail.com")]
+    assert p.phones == ["+261341234567", "+261329876543"]
+    assert len(p.errors) == 2                      # « pasunemail » et « 12 »
+
+
+def test_update_person_fixes_email_keeps_history_and_journal_has_no_address(conn, tmp_path):
+    _save(conn, tmp_path, "a.csv", [{**JEAN, "Mail": "jean@gamil.com"}])
+    pid = _only_person(conn)
+    d = person_edit.person_details(conn, pid)
+    assert d.emails == ["jean@gamil.com"]
+
+    changed = person_edit.update_person(
+        conn, pid, d.nom, d.prenom, d.sexe, ["jean@gmail.com"], d.phones
+    )
+    assert changed == ["emails"]
+    assert person_edit.person_details(conn, pid).emails == ["jean@gmail.com"]
+    assert [h[1:] for h in person_edit.edit_history(conn, pid)] == [
+        ("emails", "jean@gamil.com", "jean@gmail.com")
+    ]
+    latest = journal.list_audit(conn)[0]
+    assert latest[1] == "modification_personne"
+    assert "gmail" not in latest[2] and "gamil" not in latest[2]
+
+
+def test_manual_contact_correction_survives_a_file_replacement(conn, tmp_path):
+    a = _save(conn, tmp_path, "a.csv", [{**JEAN, "Mail": "jean@gamil.com"}])
+    pid = _only_person(conn)
+    _save(conn, tmp_path, "b.csv", [{**JEAN, "Mail": "jean@gamil.com", "Training": "IA"}],
+          attach={1: pid})
+    d = person_edit.person_details(conn, pid)
+    person_edit.update_person(conn, pid, d.nom, d.prenom, d.sexe, ["jean@gmail.com"], d.phones)
+
+    store.delete_file(conn, a.source_file_id)      # recalculerait les contacts d'une fiche normale
+    assert person_edit.person_details(conn, pid).emails == ["jean@gmail.com"]
+
+
+def test_correcting_an_opted_out_persons_email_extends_the_opposition_list(conn, tmp_path):
+    _save(conn, tmp_path, "a.csv", [{**JEAN, "Mail": "jean@gamil.com"}])
+    pid = _only_person(conn)
+    store.set_contact_status(conn, pid, True, "Désabonnement")
+    d = person_edit.person_details(conn, pid)
+    person_edit.update_person(conn, pid, d.nom, d.prenom, d.sexe, ["jean@gmail.com"], d.phones)
+    suppressed = {r[0] for r in conn.execute("SELECT email FROM suppressed_emails")}
+    assert suppressed == {"jean@gamil.com", "jean@gmail.com"}   # on ne perd jamais un désabonnement
+
+
+def test_shared_contacts_reveals_a_possible_duplicate(conn, tmp_path):
+    other = {**JEAN, "Last": "Autre", "First": "Personne", "Mail": "jean@gamil.com", "Tel": "0329876543"}
+    _save(conn, tmp_path, "a.csv", [JEAN, other])
+    first_id, second_id = _person_ids(conn)
+    d = person_edit.person_details(conn, second_id)
+    assert person_edit.shared_contacts(conn, second_id) == set()
+
+    person_edit.update_person(conn, second_id, d.nom, d.prenom, d.sexe, ["a@x.mg"], d.phones)
+    shared = person_edit.shared_contacts(conn, second_id)
+    assert {(kind, value, pid) for kind, value, pid, _ in shared} == {("email", "a@x.mg", first_id)}

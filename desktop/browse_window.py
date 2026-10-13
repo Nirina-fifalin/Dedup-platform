@@ -1,27 +1,45 @@
 import re
 import sqlite3
+from collections.abc import Callable
 from contextlib import closing
+from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 from deduplication.normalization import normalize_name
 from openpyxl import Workbook
-from collections.abc import Callable
-
-from files_window import FilesWindow
 
 import store
+from dialogs import ask_choice
+from files_window import FilesWindow
+
+import journal
+import person_edit
+from edit_person_window import EditPersonWindow
 
 MAX_SHOWN = 5000
+OPT_OUT = store.OPT_OUT
+OUTLINE = {"fg_color": "transparent", "border_width": 1, "text_color": ("gray10", "gray90")}
 COLUMNS = [
-    ("id", "N°", 60), ("nom", "Nom", 160), ("prenom", "Prénom", 180), ("sexe", "Sexe", 55),
-    ("emails", "Emails", 270), ("telephones", "Téléphones", 180), ("nb", "Inscriptions", 95),
+    ("id", "N°", 55), ("nom", "Nom", 150), ("prenom", "Prénom", 170), ("sexe", "Sexe", 50),
+    ("emails", "Emails", 250), ("telephones", "Téléphones", 170), ("nb", "Inscriptions", 90),
+    ("contact", "Contact", 130),
 ]
 DETAIL_COLUMNS = [
     ("formation", "Formation", 320), ("fichier", "Fichier d'origine", 220),
     ("email", "Email saisi", 240), ("tel", "Téléphone saisi", 150),
 ]
+FILTERS = {"Tout le monde": None, "Contactables": "ok", "Ne pas contacter": OPT_OUT}
+REASONS = {"desabonnement": "désabonnement", "demande": "demande de la personne", "autre": "autre motif"}
 _PHONE_QUERY = re.compile(r"[\d\s+().-]+")
+HINT = "Sélectionnez une personne pour voir son historique ou modifier son contact."
+
+
+def _fmt_date(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%d/%m/%Y")
+    except ValueError:
+        return iso[:10]
 
 
 def _phone_forms(phone: str) -> str:
@@ -33,7 +51,7 @@ def _phone_forms(phone: str) -> str:
 
 def _index(row: tuple) -> tuple[str, str]:
     """(texte pour chercher un nom ou un email, chiffres pour chercher un téléphone)."""
-    _id, nom, prenom, _sexe, emails, phones, _nb = row
+    _id, nom, prenom, _sexe, emails, phones, _nb, _status = row
     text = normalize_name(f"{nom} {prenom} {emails}")
     digits = " ".join(_phone_forms(p) for p in phones.split(" | ") if p)
     return text, digits
@@ -52,11 +70,11 @@ def _matches(query: str, text: str, digits: str) -> bool:
 class BrowseWindow(ctk.CTkToplevel):
     def __init__(self, master, on_change: Callable[[], None] | None = None):
         super().__init__(master)
-        self.on_change = on_change
         self.title("Base des personnes")
-        self.geometry("1020x660")
-        self.minsize(860, 540)
+        self.geometry("1100x700")
+        self.minsize(1080, 560)
         self.transient(master)
+        self.on_change = on_change
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=3)
         self.grid_rowconfigure(3, weight=1)
@@ -66,6 +84,8 @@ class BrowseWindow(ctk.CTkToplevel):
         self.matching: list[tuple] = []
         self.sort_key = "id"
         self.sort_desc = False
+        self.selected: int | None = None
+        self.selected_status = "ok"
 
         if not self._load():
             self.destroy()
@@ -82,17 +102,22 @@ class BrowseWindow(ctk.CTkToplevel):
             placeholder_text="Chercher un nom, un email ou un numéro de téléphone…",
         )
         entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.filter_var = ctk.StringVar(value="Tout le monde")
+        ctk.CTkOptionMenu(
+            bar, values=list(FILTERS), variable=self.filter_var, width=160,
+            command=lambda _v: self._apply(),
+        ).grid(row=0, column=1, padx=(0, 10))
         self.count = ctk.CTkLabel(bar, text="", text_color="gray")
-        self.count.grid(row=0, column=1, padx=(0, 10))
+        self.count.grid(row=0, column=2, padx=(0, 10))
         ctk.CTkButton(
-            bar, text="Fichiers importés…", width=150, command=self._open_files,
-            fg_color="transparent", border_width=1, text_color=("gray10", "gray90"),
-        ).grid(row=0, column=2, padx=(0, 10))
+            bar, text="Fichiers importés…", width=150, command=self._open_files, **OUTLINE
+        ).grid(row=0, column=3, padx=(0, 10))
         ctk.CTkButton(bar, text="Exporter la liste…", width=140, command=self._export).grid(
-            row=0, column=3
+            row=0, column=4
         )
 
         self.tree = self._table(1, COLUMNS, sortable=True, height=14)
+        self.tree.tag_configure("optout", foreground="#c62828")
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
 
         ctk.CTkLabel(
@@ -100,6 +125,29 @@ class BrowseWindow(ctk.CTkToplevel):
             font=ctk.CTkFont(weight="bold"),
         ).grid(row=2, column=0, padx=16, pady=(12, 4), sticky="w")
         self.detail = self._table(3, DETAIL_COLUMNS, sortable=False, height=5)
+
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.grid(row=4, column=0, padx=16, pady=(0, 14), sticky="ew")
+        self.info = ctk.CTkLabel(actions, text=HINT, text_color="gray", anchor="w")
+        self.info.pack(side="left")
+        self.delete_btn = ctk.CTkButton(
+            actions, text="Supprimer cette personne…", fg_color="#c62828", hover_color="#8e0000",
+            state="disabled", command=self._delete_person,
+        )
+        self.delete_btn.pack(side="right")
+        self.optout_btn = ctk.CTkButton(
+            actions, text="Ne plus contacter", state="disabled", command=self._toggle_contact,
+            **OUTLINE,
+        )
+        self.optout_btn.pack(side="right", padx=(0, 8))
+        self.edit_btn = ctk.CTkButton(
+            actions, text="Modifier la fiche…", state="disabled", command=self._edit_person, **OUTLINE
+        )
+        self.edit_btn.pack(side="right", padx=(0, 8))
+        self.history_btn = ctk.CTkButton(
+            actions, text="Historique…", state="disabled", command=self._show_history, **OUTLINE
+        )
+        self.history_btn.pack(side="right", padx=(0, 8))
 
         entry.focus()
         self._apply()
@@ -151,7 +199,11 @@ class BrowseWindow(ctk.CTkToplevel):
 
     def _apply(self):
         q = self.query.get()
-        self.matching = [r for r in self.rows if _matches(q, *self.search_index[r[0]])]
+        wanted = FILTERS[self.filter_var.get()]
+        self.matching = [
+            r for r in self.rows
+            if (wanted is None or r[7] == wanted) and _matches(q, *self.search_index[r[0]])
+        ]
         self._sort_rows()
         self._fill()
 
@@ -172,7 +224,11 @@ class BrowseWindow(ctk.CTkToplevel):
     def _fill(self):
         self.tree.delete(*self.tree.get_children())
         for r in self.matching[:MAX_SHOWN]:
-            self.tree.insert("", "end", values=r)
+            opted_out = r[7] == OPT_OUT
+            self.tree.insert(
+                "", "end", values=(*r[:7], "NE PAS CONTACTER" if opted_out else ""),
+                tags=("optout",) if opted_out else (),
+            )
         for key, label, _ in COLUMNS:
             arrow = (" ▼" if self.sort_desc else " ▲") if key == self.sort_key else ""
             self.tree.heading(key, text=label + arrow)
@@ -184,6 +240,48 @@ class BrowseWindow(ctk.CTkToplevel):
             text = f"{len(self.matching)} personne(s)"
         self.count.configure(text=text)
         self.detail.delete(*self.detail.get_children())
+        self._set_selected(None)
+
+    def _data_changed(self, keep: int | None = None):
+        if self._load():
+            self._apply()
+            if keep is not None:
+                self._reselect(keep)
+        if self.on_change:
+            self.on_change()
+
+    def _reselect(self, person_id: int):
+        for item in self.tree.get_children():
+            if int(str(self.tree.item(item, "values")[0])) == person_id:
+                self.tree.selection_set(item)
+                self.tree.see(item)
+                return
+
+    # --- Sélection
+    def _set_selected(self, person_id: int | None, status: str = "ok",
+                      at: str | None = None, note: str | None = None):
+        self.selected, self.selected_status = person_id, status
+        if person_id is None:
+            self.info.configure(text=HINT, text_color="gray")
+            self.optout_btn.configure(state="disabled", text="Ne plus contacter")
+            self.delete_btn.configure(state="disabled")
+            self.edit_btn.configure(state="disabled")
+            self.history_btn.configure(state="disabled")
+            return
+        if status == OPT_OUT:
+            since = f" depuis le {_fmt_date(at)}" if at else ""
+            reason = f" — {note}" if note else ""
+            self.info.configure(
+                text=f"Personne n° {person_id} : NE PAS CONTACTER{since}{reason}",
+                text_color="#c62828",
+            )
+            self.optout_btn.configure(state="normal", text="Autoriser à nouveau le contact")
+        else:
+            self.info.configure(text=f"Personne n° {person_id} : contactable", text_color="gray")
+            self.optout_btn.configure(state="normal", text="Ne plus contacter")
+        self.delete_btn.configure(state="normal")
+        self.edit_btn.configure(state="normal")
+        self.history_btn.configure(state="normal")
 
     def _on_select(self, _event=None):
         selected = self.tree.selection()
@@ -193,22 +291,107 @@ class BrowseWindow(ctk.CTkToplevel):
         try:
             with closing(store.connect()) as conn:
                 registrations = store.person_registrations(conn, person_id)
-        except sqlite3.Error:
-            registrations = []
+                status, at, note = store.contact_info(conn, person_id)
+        except (LookupError, sqlite3.Error):
+            registrations, status, at, note = [], "ok", None, None
         self.detail.delete(*self.detail.get_children())
         for r in registrations:
             self.detail.insert("", "end", values=r)
+        self._set_selected(person_id, status, at, note)
 
+    # --- Actions sur une personne
+    def _toggle_contact(self):
+        person_id = self.selected
+        if person_id is None:
+            return
+        if self.selected_status == OPT_OUT:
+            if not messagebox.askyesno(
+                "Autoriser le contact",
+                "Autoriser à nouveau le contact avec cette personne ?\n\n"
+                "Ne le faites que si elle l'a demandé.",
+                parent=self,
+            ):
+                return
+            do_not_contact, note = False, None
+        else:
+            choice = ask_choice(
+                self, "Ne plus contacter",
+                "Pourquoi cette personne ne doit-elle plus être contactée ?",
+                [("desabonnement", "Désabonnement"), ("demande", "Demande de la personne"),
+                 ("autre", "Autre motif"), ("cancel", "Annuler")],
+            )
+            if choice not in REASONS:
+                return
+            do_not_contact, note = True, REASONS[choice]
+        try:
+            with closing(store.connect()) as conn:
+                store.set_contact_status(conn, person_id, do_not_contact, note)
+        except (LookupError, sqlite3.Error) as e:
+            messagebox.showerror("Modification impossible", str(e), parent=self)
+            return
+        self._data_changed(keep=person_id)
+
+    def _delete_person(self):
+        person_id = self.selected
+        row = next((r for r in self.rows if r[0] == person_id), None)
+        if person_id is None or row is None:
+            return
+        message = (
+            f"Supprimer {row[1]} {row[2]} (n° {person_id}) et ses {row[6]} inscription(s) ?\n\n"
+            "Ses données sont effacées de la base. Une sauvegarde automatique est faite avant : "
+            "« Restaurer… » sur l'écran principal permet de revenir en arrière."
+        )
+        if row[7] == OPT_OUT:
+            message += ("\n\nSes adresses email restent dans la liste d'opposition, "
+                        "pour ne pas la recontacter.")
+        if not messagebox.askyesno("Supprimer une personne", message, parent=self):
+            return
+        try:
+            backup = store.auto_backup("avant-suppression-personne")   # pas de sauvegarde = pas de suppression
+            with closing(store.connect()) as conn:
+                store.delete_person(conn, person_id)
+        except Exception as e:
+            messagebox.showerror("Suppression impossible", str(e), parent=self)
+            return
+        self._data_changed()
+        messagebox.showinfo(
+            "Personne supprimée",
+            f"La personne n° {person_id} a été supprimée.\n\nSauvegarde de l'état précédent : "
+            f"dossier « sauvegardes », fichier {backup.name}.",
+            parent=self,
+        )
+    def _edit_person(self):
+        if self.selected is None:
+            return
+        EditPersonWindow(self, self.selected, on_saved=lambda pid: self._data_changed(keep=pid))
+
+    def _show_history(self):
+        if self.selected is None:
+            return
+        try:
+            with closing(store.connect()) as conn:
+                history = person_edit.edit_history(conn, self.selected)
+        except sqlite3.Error as e:
+            messagebox.showerror("Historique indisponible", str(e), parent=self)
+            return
+        if not history:
+            messagebox.showinfo(
+                "Historique", "Aucune modification n'a été faite sur cette fiche.", parent=self
+            )
+            return
+        lines = [
+            f"{journal.fmt_datetime(at)} — {field} : « {old} » → « {new} »"
+            for at, field, old, new in history[:15]
+        ]
+        if len(history) > 15:
+            lines.append(f"… et {len(history) - 15} autre(s)")
+        journal.record_action("export_liste", f"{len(self.matching)} personnes exportées")
+        messagebox.showinfo(f"Historique de la fiche n° {self.selected}", "\n".join(lines), parent=self)
+
+    # --- Autres fenêtres et export
     def _open_files(self):
         FilesWindow(self, on_change=self._data_changed)
 
-    def _data_changed(self):
-        if self._load():
-            self._apply()
-        if self.on_change:
-            self.on_change()
-
-    # --- Export
     def _export(self):
         if not self.matching:
             messagebox.showinfo("Export", "Il n'y a rien à exporter.", parent=self)
@@ -221,10 +404,12 @@ class BrowseWindow(ctk.CTkToplevel):
             return
         wb = Workbook(write_only=True)
         ws = wb.create_sheet("personnes")
-        ws.append(["id_personne", "nom", "prenom", "sexe", "emails", "telephones", "nb_inscriptions"])
+        ws.append(["id_personne", "nom", "prenom", "sexe", "emails", "telephones",
+                   "nb_inscriptions", "statut_contact"])
         for r in self.matching:
+            values = [*r[:7], "ne pas contacter" if r[7] == OPT_OUT else "contactable"]
             # une valeur commençant par "=" serait exécutée comme une formule par Excel
-            ws.append([("'" + v) if isinstance(v, str) and v.startswith("=") else v for v in r])
+            ws.append([("'" + v) if isinstance(v, str) and v.startswith("=") else v for v in values])
         try:
             wb.save(target)
         except PermissionError:

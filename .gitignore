@@ -53,3 +53,4 @@ $RECYCLE.BIN/
 desktop/column_mappings.json
 desktop/data/
 *.db
+*.spec

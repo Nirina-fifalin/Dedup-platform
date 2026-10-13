@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from paths import data_dir
 from contextlib import closing
 
 from deduplication import DedupResult, KnownPerson, NormalizedRecord
@@ -12,10 +13,11 @@ from deduplication.normalization import normalize_email, normalize_phone, split_
 
 from exporter import EMAIL_SIMILAR, _collect_emails, _collect_phones, _raw
 
-DB_PATH = Path(__file__).with_name("data") / "historique.db"
+DB_PATH = data_dir() / "historique.db"
 
 BACKUP_DIR = DB_PATH.parent / "sauvegardes"
 KEEP_BACKUPS = 15
+OPT_OUT = "do_not_contact"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_files (
@@ -64,6 +66,19 @@ CREATE TABLE IF NOT EXISTS audit_log (
     action TEXT NOT NULL,
     detail TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS suppressed_emails (
+    email TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS edit_history (
+    id INTEGER PRIMARY KEY,
+    person_id INTEGER NOT NULL REFERENCES persons(id) ON DELETE CASCADE,
+    at TEXT NOT NULL,
+    field TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_edit_person ON edit_history(person_id);
 CREATE INDEX IF NOT EXISTS ix_emails_email ON person_emails(email);
 CREATE INDEX IF NOT EXISTS ix_phones_phone ON person_phones(phone);
 CREATE INDEX IF NOT EXISTS ix_persons_norm ON persons(nom_norm, prenom_norm);
@@ -90,8 +105,18 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
-    if conn.execute("PRAGMA user_version").fetchone()[0] == 0:
-        conn.execute("PRAGMA user_version = 1")
+    if conn.execute("PRAGMA user_version").fetchone()[0] < 3:
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(persons)")}
+        for name, ddl in (
+            ("contact_status", "ALTER TABLE persons ADD COLUMN contact_status TEXT NOT NULL DEFAULT 'ok'"),
+            ("contact_status_at", "ALTER TABLE persons ADD COLUMN contact_status_at TEXT"),
+            ("contact_note", "ALTER TABLE persons ADD COLUMN contact_note TEXT"),
+            ("contacts_locked", "ALTER TABLE persons ADD COLUMN contacts_locked INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if name not in columns:
+                conn.execute(ddl)
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
     return conn
 
 
@@ -226,6 +251,11 @@ def _contacts_from_cells(email_cells: list, phone_cells: list) -> tuple[list[str
 
 def rebuild_contacts(conn: sqlite3.Connection, person_id: int) -> None:
     """Recalcule les emails/téléphones d'une personne à partir de ses inscriptions restantes."""
+    locked = conn.execute(
+        "SELECT contacts_locked FROM persons WHERE id = ?", (person_id,)
+    ).fetchone()
+    if locked and locked[0]:
+        return   # contacts corrigés à la main : on n'y touche pas
     cells = conn.execute(
         "SELECT email_saisi, telephone_saisi FROM registrations WHERE person_id = ? ORDER BY id",
         (person_id,),
@@ -337,11 +367,17 @@ def save_analysis(
                     json.dumps(rec.raw, ensure_ascii=False, default=str),
                 ),
             )
+        sync_suppression(conn)
+        log_action(
+            conn, "remplacement_fichier" if replace else "import_fichier",
+            f"{path.name} : {len(records)} inscriptions, {created} nouvelles personnes, "
+            f"{len(final.clusters) - created} personnes déjà connues",
+        )
     return SaveReport(source_id, created, len(final.clusters) - created, len(records))
 
 
 def list_persons(conn: sqlite3.Connection) -> list[tuple]:
-    """Une ligne par personne : (n°, nom, prénom, sexe, emails, téléphones, nb d'inscriptions)."""
+    """Une ligne par personne : (n°, nom, prénom, sexe, emails, téléphones, nb d'inscriptions, statut de contact)."""
     return conn.execute(
         """
         SELECT p.id, p.nom, p.prenom, COALESCE(p.sexe, ''),
@@ -351,7 +387,8 @@ def list_persons(conn: sqlite3.Connection) -> list[tuple]:
           COALESCE((SELECT group_concat(phone, ' | ') FROM
                       (SELECT phone FROM person_phones WHERE person_id = p.id
                        ORDER BY is_primary DESC, id)), ''),
-          (SELECT count(*) FROM registrations WHERE person_id = p.id)
+          (SELECT count(*) FROM registrations WHERE person_id = p.id),
+          p.contact_status
         FROM persons p ORDER BY p.id
         """
     ).fetchall()
@@ -479,3 +516,88 @@ def restore_from(path: Path) -> Path:
                 )
             log_action(conn, "restauration", path.name)
     return safety
+
+
+def contact_info(conn: sqlite3.Connection, person_id: int) -> tuple[str, str | None, str | None]:
+    """(statut, date du statut, motif)."""
+    row = conn.execute(
+        "SELECT contact_status, contact_status_at, contact_note FROM persons WHERE id = ?",
+        (person_id,),
+    ).fetchone()
+    if row is None:
+        raise LookupError("Personne introuvable")
+    return row
+
+
+def sync_suppression(conn: sqlite3.Connection) -> None:
+    """Liste d'opposition : les emails des personnes « ne plus contacter » y sont inscrits, et toute
+    personne dont un email y figure est marquée « ne plus contacter » (même si elle a été recréée)."""
+    now = _now()
+    conn.execute(
+        "INSERT OR IGNORE INTO suppressed_emails (email, created_at) "
+        "SELECT e.email, ? FROM person_emails e JOIN persons p ON p.id = e.person_id "
+        "WHERE p.contact_status = 'do_not_contact'",
+        (now,),
+    )
+    conn.execute(
+        "UPDATE persons SET contact_status = 'do_not_contact', contact_status_at = ?, "
+        "contact_note = COALESCE(contact_note, 'liste d''opposition') "
+        "WHERE contact_status = 'ok' AND id IN ("
+        "SELECT e.person_id FROM person_emails e JOIN suppressed_emails s ON s.email = e.email)",
+        (now,),
+    )
+
+
+def set_contact_status(
+    conn: sqlite3.Connection, person_id: int, do_not_contact: bool, note: str | None = None
+) -> None:
+    now = _now()
+    with conn:
+        if do_not_contact:
+            cur = conn.execute(
+                "UPDATE persons SET contact_status = 'do_not_contact', contact_status_at = ?, "
+                "contact_note = ? WHERE id = ?",
+                (now, note, person_id),
+            )
+            if cur.rowcount == 0:
+                raise LookupError("Personne introuvable")
+            sync_suppression(conn)
+            log_action(conn, "ne_plus_contacter", f"personne n° {person_id}")
+        else:
+            emails = [r[0] for r in conn.execute(
+                "SELECT email FROM person_emails WHERE person_id = ?", (person_id,)
+            )]
+            cur = conn.execute(
+                "UPDATE persons SET contact_status = 'ok', contact_status_at = ?, "
+                "contact_note = NULL WHERE id = ?",
+                (now, person_id),
+            )
+            if cur.rowcount == 0:
+                raise LookupError("Personne introuvable")
+            conn.executemany("DELETE FROM suppressed_emails WHERE email = ?", [(e,) for e in emails])
+            log_action(conn, "contact_reautorise", f"personne n° {person_id}")
+
+
+def delete_person(conn: sqlite3.Connection, person_id: int) -> int:
+    """Efface une personne et ses inscriptions. Retourne le nombre d'inscriptions effacées.
+    Si elle était « ne plus contacter », ses emails restent dans la liste d'opposition."""
+    row = conn.execute("SELECT contact_status FROM persons WHERE id = ?", (person_id,)).fetchone()
+    if row is None:
+        raise LookupError("Personne introuvable")
+    count = conn.execute(
+        "SELECT count(*) FROM registrations WHERE person_id = ?", (person_id,)
+    ).fetchone()[0]
+    opted_out = row[0] == OPT_OUT
+    with conn:
+        if opted_out:
+            sync_suppression(conn)
+        conn.execute("DELETE FROM registrations WHERE person_id = ?", (person_id,))
+        conn.execute("DELETE FROM person_emails WHERE person_id = ?", (person_id,))
+        conn.execute("DELETE FROM person_phones WHERE person_id = ?", (person_id,))
+        conn.execute("DELETE FROM persons WHERE id = ?", (person_id,))
+        log_action(
+            conn, "suppression_personne",
+            f"personne n° {person_id} : {count} inscription(s)"
+            + (" ; emails conservés dans la liste d'opposition" if opted_out else ""),
+        )
+    return count

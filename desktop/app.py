@@ -1,6 +1,8 @@
 import queue
 import sqlite3
 import threading
+import sys
+import traceback
 from collections import Counter
 from contextlib import closing
 from datetime import datetime
@@ -15,12 +17,16 @@ from deduplication import (
 from tkinterdnd2 import DND_FILES, TkinterDnD
 
 import store
+from paths import data_dir
 from browse_window import BrowseWindow
 from dialogs import ask_choice
 from exporter import export_workbook
 from file_reader import guess_mapping, load_saved_mapping, read_rows, save_mapping
 from mapping_dialog import MappingDialog
 from review_window import ReviewWindow
+
+import journal
+from journal_window import JournalWindow
 
 ctk.set_appearance_mode("system")
 ctk.set_default_color_theme("blue")
@@ -63,9 +69,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
     def __init__(self):
         super().__init__()
         self.dnd_ok = self._enable_drop()
-        self.title("Déduplication des inscriptions")
+        self.title("Dédups")
         self.geometry("1000x720")
-        self.minsize(900, 640)
+        self.minsize(1000, 640)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(3, weight=1)
 
@@ -75,6 +81,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self._review_win: ReviewWindow | None = None
         self._known_win: ReviewWindow | None = None
         self._browse_win: BrowseWindow | None = None
+        self._journal_win: JournalWindow | None = None
         self.records: list[NormalizedRecord] | None = None
         self.result: DedupResult | None = None
         self.final: DedupResult | None = None
@@ -101,6 +108,24 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self._build_footer()
         self._update_db_label()
         self._reset_view()
+
+    def report_callback_exception(self, exc, val, tb):
+        """Une erreur inattendue ne doit pas passer inaperçue (le .exe n'a pas de console)."""
+        text = "".join(traceback.format_exception(exc, val, tb))
+        if sys.stderr:
+            sys.stderr.write(text)
+        log = data_dir() / "erreurs.log"
+        try:
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a", encoding="utf-8") as f:
+                f.write(f"--- {datetime.now():%Y-%m-%d %H:%M:%S}\n{text}\n")
+        except OSError:
+            pass
+        messagebox.showerror(
+            "Erreur inattendue",
+            f"Une erreur est survenue :\n{val}\n\nLe détail est enregistré dans :\n{log}\n"
+            "(il peut contenir des extraits de données : ne le partagez pas sans le relire)",
+        )
 
     # ------------------------------------------------------------------ glisser-déposer
     def _enable_drop(self) -> bool:
@@ -167,13 +192,15 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.db_label.grid(row=1, column=0, sticky="w")
         tools = ctk.CTkFrame(header, fg_color="transparent")
         tools.grid(row=0, column=1, rowspan=2, sticky="e")
-        ctk.CTkButton(tools, text="Consulter la base", command=self.open_browse, **OUTLINE).pack(
-            side="left", padx=(0, 8)
-        )
-        ctk.CTkButton(tools, text="Sauvegarder la base", command=self.backup_db, **OUTLINE).pack(
-            side="left", padx=(0, 8)
-        )
-        ctk.CTkButton(tools, text="Restaurer…", command=self.restore_db, **OUTLINE).pack(side="left")
+        for text, command in (
+            ("Consulter la base", self.open_browse),
+            ("Sauvegarder la base", self.backup_db),
+            ("Restaurer…", self.restore_db),
+            ("Journal", self.open_journal),
+        ):
+            ctk.CTkButton(tools, text=text, command=command, **OUTLINE).pack(
+                side="left", padx=(0, 8)
+            )
         self.hint = ctk.CTkLabel(
             self, text="", anchor="w", font=ctk.CTkFont(size=14), text_color=ACCENT
         )
@@ -456,6 +483,12 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             return
         self._browse_win = BrowseWindow(self, on_change=self._update_db_label)
 
+    def open_journal(self):
+        if self._journal_win is not None and self._journal_win.winfo_exists():
+            self._journal_win.lift()
+            return
+        self._journal_win = JournalWindow(self)
+
     # ------------------------------------------------------------------ export, sauvegarde, restauration, enregistrement
     def export(self):
         if self.records is None or self.final is None or self._path is None:
@@ -478,6 +511,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         except Exception as e:
             messagebox.showerror("Export impossible", str(e))
             return
+        journal.record_action(
+            "export_fichier_nettoye", f"{self._path.name} : {len(self.records)} lignes"
+        )
         messagebox.showinfo("Export terminé", f"Fichier enregistré :\n{target}")
 
     def backup_db(self):
@@ -493,6 +529,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         except Exception as e:
             messagebox.showerror("Sauvegarde impossible", str(e))
             return
+        journal.record_action(
+            "sauvegarde_manuelle", "copie de la base enregistrée",
+        )
         messagebox.showinfo(
             "Sauvegarde terminée",
             f"La base a été copiée dans :\n{target}\n\n"

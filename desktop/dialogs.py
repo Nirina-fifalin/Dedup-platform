@@ -34,7 +34,7 @@ def ask_choice(master, title: str, message: str, choices: list[tuple[str, str]])
 class TypedConfirmDialog(ctk.CTkToplevel):
     """Confirmation forte : le bouton ne s'active que si on a tapé le mot demandé."""
 
-    def __init__(self, master, title: str, message: str, word: str):
+    def __init__(self, master, title: str, message: str, word: str, button: str):
         super().__init__(master)
         self.title(title)
         self.resizable(False, False)
@@ -57,7 +57,7 @@ class TypedConfirmDialog(ctk.CTkToplevel):
             row, text="Annuler", fg_color="gray40", hover_color="gray30", command=self.destroy
         ).pack(side="left", padx=4)
         self._ok = ctk.CTkButton(
-            row, text="Supprimer le fichier", fg_color="#c62828", hover_color="#8e0000",
+            row, text=button, fg_color="#c62828", hover_color="#8e0000",
             state="disabled", command=self._confirm,
         )
         self._ok.pack(side="left", padx=4)
@@ -74,7 +74,9 @@ class TypedConfirmDialog(ctk.CTkToplevel):
         self.destroy()
 
 
-def ask_typed_confirmation(master, title: str, message: str, word: str = "SUPPRIMER") -> bool:
-    dialog = TypedConfirmDialog(master, title, message, word)
+def ask_typed_confirmation(
+    master, title: str, message: str, word: str = "SUPPRIMER", button: str = "Supprimer"
+) -> bool:
+    dialog = TypedConfirmDialog(master, title, message, word, button)
     master.wait_window(dialog)
     return dialog.confirmed

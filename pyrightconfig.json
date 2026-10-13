@@ -1,5 +1,5 @@
 {
-  "extraPaths": ["backend", "deduplication-engine/src"],
+  "extraPaths": ["desktop", "backend", "deduplication-engine/src"],
   "venvPath": "deduplication-engine",
   "venv": ".venv"
 }
