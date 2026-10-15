@@ -8,6 +8,7 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
+from theme import ORANGE, apply_orange_theme, keep_white_text_on_colored_buttons
 
 import customtkinter as ctk
 from deduplication import (
@@ -29,10 +30,11 @@ import journal
 from journal_window import JournalWindow
 
 ctk.set_appearance_mode("system")
-ctk.set_default_color_theme("blue")
+apply_orange_theme()
+keep_white_text_on_colored_buttons()
 
 OUTLINE = {"fg_color": "transparent", "border_width": 1, "text_color": ("gray10", "gray90")}
-ACCENT = ("#1f6aa5", "#6fb3e8")
+ACCENT = ("#CC6100", ORANGE)
 ZONE_BORDER = ("gray70", "gray35")
 
 ISSUE_LABELS = {
@@ -181,6 +183,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
     # ------------------------------------------------------------------ construction
     def _build_header(self):
+        ctk.CTkFrame(self, height=6, corner_radius=0, fg_color=ORANGE).place(x=0, y=0, relwidth=1)
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.grid(row=0, column=0, padx=24, pady=(18, 0), sticky="ew")
         header.grid_columnconfigure(0, weight=1)
@@ -305,8 +308,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.footer_hint.grid(row=0, column=1, padx=12, sticky="e")
         self.save_btn = ctk.CTkButton(
             footer, text="Enregistrer dans la base", width=220, height=40, command=self.save_to_db,
-            state="disabled", fg_color="#2e7d32", hover_color="#1b5e20",
-            font=ctk.CTkFont(weight="bold"),
+            state="disabled", font=ctk.CTkFont(weight="bold"),
         )
         self.save_btn.grid(row=0, column=2)
 

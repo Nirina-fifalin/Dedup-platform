@@ -83,7 +83,7 @@ class EditPersonWindow(ctk.CTkToplevel):
 
         buttons = ctk.CTkFrame(self, fg_color="transparent")
         buttons.grid(row=9, column=0, columnspan=2, pady=16)
-        ctk.CTkButton(buttons, text="Enregistrer", command=self._save).pack(side="left", padx=5)
+        ctk.CTkButton(buttons, text="Enregistrer", command=self._save).pack(side="left", padx=4)
         ctk.CTkButton(
             buttons, text="Annuler", fg_color="gray40", hover_color="gray30", command=self.destroy
         ).pack(side="left", padx=5)

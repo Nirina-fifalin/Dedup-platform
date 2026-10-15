@@ -13,6 +13,7 @@ def test_frozen_app_uses_local_appdata(monkeypatch, tmp_path):
     assert paths.data_dir() == tmp_path / paths.APP_NAME
 
 
-def test_development_uses_the_local_data_folder(monkeypatch):
+def test_development_data_lives_outside_the_project(monkeypatch, tmp_path):
     monkeypatch.delenv("DEDUP_DATA_DIR", raising=False)
-    assert paths.data_dir().name == "data"
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert paths.data_dir() == tmp_path / (paths.APP_NAME + "-dev")

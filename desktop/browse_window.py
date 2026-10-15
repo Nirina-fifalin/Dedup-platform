@@ -4,6 +4,7 @@ from collections.abc import Callable
 from contextlib import closing
 from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
+from ui_style import apply_tree_style
 
 import customtkinter as ctk
 from deduplication.normalization import normalize_name
@@ -90,7 +91,7 @@ class BrowseWindow(ctk.CTkToplevel):
         if not self._load():
             self.destroy()
             return
-        self._style()
+        apply_tree_style(self)
 
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.grid(row=0, column=0, padx=16, pady=(14, 8), sticky="ew")
@@ -174,17 +175,6 @@ class BrowseWindow(ctk.CTkToplevel):
         scroll.grid(row=0, column=1, sticky="ns")
         return tree
 
-    def _style(self):
-        dark = ctk.get_appearance_mode() == "Dark"
-        bg, fg = ("#2b2b2b", "#e6e6e6") if dark else ("#ffffff", "#1a1a1a")
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("Treeview", background=bg, fieldbackground=bg, foreground=fg,
-                        rowheight=26, borderwidth=0)
-        style.configure("Treeview.Heading", background="#3a3a3a" if dark else "#e8e8e8",
-                        foreground=fg, relief="flat", font=("Segoe UI", 10, "bold"))
-        style.map("Treeview", background=[("selected", "#1f6aa5" if dark else "#3b8ed0")],
-                  foreground=[("selected", "#ffffff")])
 
     # --- Données
     def _load(self) -> bool:

@@ -162,7 +162,7 @@ def test_removal_preview_and_delete_file_keep_shared_persons(conn, tmp_path):
     store.delete_file(conn, a.source_file_id)
     assert store.stats(conn) == (1, 1, 1)         # Marie supprimée ; Jean gardé, avec l'inscription de b.csv
     assert [r[0] for r in conn.execute("SELECT email FROM person_emails")] == ["b@x.mg"]
-    assert conn.execute("SELECT action FROM audit_log").fetchone()[0] == "suppression_fichier"
+    assert conn.execute("SELECT action FROM audit_log ORDER BY id DESC").fetchone()[0] == "suppression_fichier"
 
 
 def test_auto_backup_and_restore_roundtrip(tmp_path, monkeypatch):
@@ -186,7 +186,7 @@ def test_auto_backup_and_restore_roundtrip(tmp_path, monkeypatch):
     with closing(store.connect()) as conn:
         assert store.stats(conn) == (2, 3, 1)
         actions = [r[0] for r in conn.execute("SELECT action FROM audit_log ORDER BY id")]
-    assert actions == ["suppression_fichier", "restauration"]   # le journal survit à la restauration
+    assert actions == ["import_fichier", "suppression_fichier", "restauration"]   # le journal survit à la restauration
 
 
 JEAN = {"Last": "Rakoto", "First": "Jean", "Mail": "a@x.mg", "Tel": "0341234567", "Training": "Excel"}
@@ -218,7 +218,7 @@ def test_connect_migrates_an_old_database(tmp_path):
     raw.close()
     with closing(store.connect(path)) as migrated:
         assert migrated.execute("SELECT contact_status FROM persons").fetchone()[0] == "ok"
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_do_not_contact_survives_file_removal_and_reimport(conn, tmp_path):
