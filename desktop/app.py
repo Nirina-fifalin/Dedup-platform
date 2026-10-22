@@ -8,7 +8,10 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox
-from theme import ORANGE, apply_orange_theme, keep_white_text_on_colored_buttons
+from theme import (
+    ORANGE, ORANGE_DARK, apply_orange_theme, polish_buttons, polish_tables, polish_windows,
+    style_title_bar,
+)
 
 import customtkinter as ctk
 from deduplication import (
@@ -20,9 +23,12 @@ from tkinterdnd2 import DND_FILES, TkinterDnD
 import store
 from paths import data_dir
 from browse_window import BrowseWindow
-from dialogs import ask_choice
+from dialogs import ask_choice, ask_sheets
 from exporter import export_workbook
-from file_reader import guess_mapping, load_saved_mapping, read_rows, save_mapping
+from file_reader import (
+    SHEET_KEYS, Sheet, combine_sheets, guess_mapping, load_saved_mapping,
+    looks_like_registrations, read_workbook, save_mapping, sheet_problems,
+)
 from mapping_dialog import MappingDialog
 from review_window import ReviewWindow
 
@@ -31,11 +37,20 @@ from journal_window import JournalWindow
 
 ctk.set_appearance_mode("system")
 apply_orange_theme()
-keep_white_text_on_colored_buttons()
+polish_buttons()
+polish_windows()
+polish_tables()
 
 OUTLINE = {"fg_color": "transparent", "border_width": 1, "text_color": ("gray10", "gray90")}
 ACCENT = ("#CC6100", ORANGE)
-ZONE_BORDER = ("gray70", "gray35")
+ZONE_BG = ("#FFF4EA", "#2B2118")
+ZONE_BG_HOVER = ("#FFE3CB", "#3A2A1B")
+ZONE_BORDER = (ORANGE, ORANGE_DARK)
+HEADER_BG = "#000000"
+HEADER_BUTTON = {
+    "fg_color": "transparent", "border_width": 1, "border_color": "#FFFFFF",
+    "text_color": "#FFFFFF", "hover_color": "#333333", "height": 32,
+}
 
 ISSUE_LABELS = {
     "email_invalid": "adresse email incorrecte (non utilisée)",
@@ -84,6 +99,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self._known_win: ReviewWindow | None = None
         self._browse_win: BrowseWindow | None = None
         self._journal_win: JournalWindow | None = None
+        self._selected_sheets: list[Sheet] = []
         self.records: list[NormalizedRecord] | None = None
         self.result: DedupResult | None = None
         self.final: DedupResult | None = None
@@ -110,6 +126,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self._build_footer()
         self._update_db_label()
         self._reset_view()
+        self.after(300, lambda: style_title_bar(self))
 
     def report_callback_exception(self, exc, val, tb):
         """Une erreur inattendue ne doit pas passer inaperçue (le .exe n'a pas de console)."""
@@ -143,11 +160,11 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         return True
 
     def _drop_enter(self, event):
-        self.zone.configure(border_color=ACCENT)
+        self.zone.configure(fg_color=ZONE_BG_HOVER)
         return event.action
 
     def _drop_leave(self, event):
-        self.zone.configure(border_color=ZONE_BORDER)
+        self.zone.configure(fg_color=ZONE_BG)
         return event.action
 
     def _on_drop(self, event):
@@ -183,34 +200,36 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
     # ------------------------------------------------------------------ construction
     def _build_header(self):
-        ctk.CTkFrame(self, height=6, corner_radius=0, fg_color=ORANGE).place(x=0, y=0, relwidth=1)
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, padx=24, pady=(18, 0), sticky="ew")
+        header = ctk.CTkFrame(self, fg_color=HEADER_BG, corner_radius=0)
+        header.grid(row=0, column=0, sticky="ew")
         header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
-            header, text="Déduplication des inscriptions",
+            header, text="Déduplication des inscriptions", text_color="#FFFFFF",
             font=ctk.CTkFont(size=22, weight="bold"),
-        ).grid(row=0, column=0, sticky="w")
-        self.db_label = ctk.CTkLabel(header, text="", text_color="gray", anchor="w")
-        self.db_label.grid(row=1, column=0, sticky="w")
+        ).grid(row=0, column=0, padx=24, pady=(16, 0), sticky="w")
+        self.db_label = ctk.CTkLabel(header, text="", text_color="#BDBDBD", anchor="w")
+        self.db_label.grid(row=1, column=0, padx=24, pady=(0, 14), sticky="w")
         tools = ctk.CTkFrame(header, fg_color="transparent")
-        tools.grid(row=0, column=1, rowspan=2, sticky="e")
+        tools.grid(row=0, column=1, rowspan=2, padx=24, sticky="e")
         for text, command in (
-            ("Consulter la base", self.open_browse),
-            ("Sauvegarder la base", self.backup_db),
-            ("Restaurer…", self.restore_db),
-            ("Journal", self.open_journal),
+            ("Consulter la base", self.open_browse), ("Sauvegarder la base", self.backup_db),
+            ("Restaurer…", self.restore_db), ("Journal", self.open_journal),
         ):
-            ctk.CTkButton(tools, text=text, command=command, **OUTLINE).pack(
-                side="left", padx=(0, 8)
+            ctk.CTkButton(tools, text=text, command=command, **HEADER_BUTTON).pack(
+                side="left", padx=(8, 0)
             )
+        ctk.CTkFrame(header, height=3, corner_radius=0, fg_color=ORANGE).grid(
+            row=2, column=0, columnspan=2, sticky="ew"
+        )
         self.hint = ctk.CTkLabel(
             self, text="", anchor="w", font=ctk.CTkFont(size=14), text_color=ACCENT
         )
-        self.hint.grid(row=1, column=0, padx=24, pady=(10, 8), sticky="ew")
+        self.hint.grid(row=1, column=0, padx=24, pady=(14, 8), sticky="ew")
 
     def _build_file_panel(self):
-        self.zone = ctk.CTkFrame(self, corner_radius=12, border_width=2, border_color=ZONE_BORDER)
+        self.zone = ctk.CTkFrame(
+            self, corner_radius=12, border_width=2, border_color=ZONE_BORDER, fg_color=ZONE_BG
+        )
         self.zone.grid(row=2, column=0, padx=24, pady=(0, 12), sticky="ew")
         self.zone.grid_columnconfigure(0, weight=1)
         self.zone_title = ctk.CTkLabel(self.zone, text="", font=ctk.CTkFont(size=17, weight="bold"))
@@ -242,10 +261,22 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             self.choose_btn.configure(text="Choisir un autre fichier…")
 
     def _build_results(self):
-        self.placeholder = ctk.CTkLabel(
-            self, text="Les résultats de l'analyse s'afficheront ici.", text_color="gray"
-        )
-        self.placeholder.grid(row=3, column=0)
+        self.placeholder = ctk.CTkFrame(self, fg_color="transparent")
+        self.placeholder.grid(row=3, column=0, padx=24, pady=(14, 0), sticky="n")
+        steps = [
+            ("1", "Déposez le fichier", "Un Excel ou un CSV d'inscriptions."),
+            ("2", "Analysez", "Les doublons et les personnes déjà connues sont repérés."),
+            ("3", "Vérifiez et enregistrez", "Vous tranchez les cas douteux, puis tout est classé dans la base."),
+        ]
+        for col, (number, title, text) in enumerate(steps):
+            step = ctk.CTkFrame(self.placeholder, fg_color="transparent")
+            step.grid(row=0, column=col, padx=22, sticky="n")
+            ctk.CTkLabel(
+                step, text=number, width=44, height=44, corner_radius=22, fg_color=ORANGE,
+                text_color="#000000", font=ctk.CTkFont(size=20, weight="bold"),
+            ).pack()
+            ctk.CTkLabel(step, text=title, font=ctk.CTkFont(size=15, weight="bold")).pack(pady=(10, 2))
+            ctk.CTkLabel(step, text=text, text_color="gray", wraplength=220, justify="center").pack()
 
         r = self.results = ctk.CTkScrollableFrame(self, fg_color="transparent")
         r.grid_columnconfigure((0, 1, 2, 3), weight=1, uniform="cards")
@@ -365,12 +396,27 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         if self._path is None:
             return
         try:
-            rows = read_rows(self._path)
-            if not rows:
+            sheets = read_workbook(self._path)
+            if not sheets:
                 raise ValueError("Le fichier est vide.")
         except Exception as e:
             messagebox.showerror("Lecture impossible", str(e))
             return
+        multi = len(sheets) > 1
+        if multi:
+            chosen = ask_sheets(self, [
+                (
+                    s.name, len(s.rows), looks_like_registrations(s),
+                    "" if looks_like_registrations(s)
+                    else "ne ressemble pas à une liste de personnes (pas de colonnes nom et prénom)",
+                )
+                for s in sheets
+            ])
+            if not chosen:
+                return
+            sheets = [s for s in sheets if s.name in chosen]
+        self._selected_sheets = sheets
+        rows = combine_sheets(sheets, label_rows=multi)
 
         # Un fichier du même nom a-t-il déjà été enregistré ? (version corrigée ?)
         self.replace_ids, self.replace_note = [], ""
@@ -397,7 +443,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                 self.replace_ids = [v[0] for v in versions]
                 self.replace_note = f"↻ Cette feuille remplacera la version enregistrée le {when}."
 
-        headers = [str(h) for h in rows[0].keys()]
+        headers = [str(h) for h in rows[0].keys() if h not in SHEET_KEYS]
         initial = load_saved_mapping(headers) or guess_mapping(headers)
         MappingDialog(
             self, headers, initial, rows[0],
@@ -405,6 +451,20 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         )
 
     def _start(self, rows: list[dict], headers: list[str], mapping: dict[str, str]):
+        errors, warnings = sheet_problems(self._selected_sheets, mapping)
+        if errors:
+            messagebox.showerror(
+                "Colonnes manquantes",
+                "\n".join(errors[:12]) + ("\n…" if len(errors) > 12 else "")
+                + "\n\nDécochez ces feuilles, ou analysez-les séparément.",
+            )
+            return
+        if warnings and not messagebox.askyesno(
+            "Colonnes manquantes",
+            "\n".join(warnings[:12]) + ("\n…" if len(warnings) > 12 else "")
+            + "\n\nCes informations resteront vides pour ces feuilles. Continuer ?",
+        ):
+            return
         save_mapping(headers, mapping)
         self._busy(True)
         threading.Thread(

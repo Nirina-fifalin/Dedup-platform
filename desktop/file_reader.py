@@ -4,6 +4,7 @@ from pathlib import Path
 
 from deduplication.normalization import normalize_name
 from paths import data_dir
+from dataclasses import dataclass
 
 SYNONYMS = {
     "nom": {"nom", "nom de famille", "last name", "lastname", "surname", "family name"},
@@ -129,3 +130,97 @@ def read_rows(path: str | Path) -> list[dict]:
         finally:
             wb.close()
     raise ValueError(f"Format non supporté : {suffix} (utiliser .csv ou .xlsx)")
+
+
+SHEET_KEYS = ("Feuille", "Ligne feuille")
+
+
+@dataclass
+class Sheet:
+    name: str
+    headers: list[str]
+    rows: list[dict]
+    numbers: list[int]          # numéro de ligne dans la feuille Excel, pour chaque ligne de données
+
+
+def _read_xlsx_sheets(path: Path) -> list[Sheet]:
+    from openpyxl import load_workbook
+
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheets: list[Sheet] = []
+        for ws in wb.worksheets:
+            if ws.sheet_state != "visible":          # feuilles masquées (listes, calculs) : ignorées
+                continue
+            headers: list[str] = []
+            rows: list[dict] = []
+            numbers: list[int] = []
+            for number, values in enumerate(ws.iter_rows(values_only=True), start=1):
+                if not headers:
+                    if any(v is not None and str(v).strip() for v in values):
+                        headers = [str(v).strip() if v is not None else "" for v in values]
+                    continue
+                if any(v is not None for v in values):
+                    rows.append(dict(zip(headers, values)))
+                    numbers.append(number)
+            if rows:
+                sheets.append(Sheet(ws.title, headers, rows, numbers))
+        return sheets
+    finally:
+        wb.close()
+
+
+def read_workbook(path: str | Path) -> list[Sheet]:
+    """Les feuilles de données d'un fichier : un classeur Excel peut en avoir plusieurs, un CSV une seule."""
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix == ".csv":
+        text = _read_csv_text(path)
+        rows = list(csv.DictReader(text.splitlines(), delimiter=_delimiter(text)))
+        if not rows:
+            return []
+        return [Sheet(path.stem, list(rows[0].keys()), rows, list(range(2, len(rows) + 2)))]
+    if suffix == ".xlsx":
+        return _read_xlsx_sheets(path)
+    raise ValueError(f"Format non supporté : {suffix} (utiliser .csv ou .xlsx)")
+
+
+def looks_like_registrations(sheet: Sheet) -> bool:
+    """Vrai si la feuille a des colonnes de nom et de prénom : une liste de personnes."""
+    mapping = guess_mapping(sheet.headers)
+    return "nom" in mapping and "prenom" in mapping
+
+
+def combine_sheets(sheets: list[Sheet], label_rows: bool) -> list[dict]:
+    """Met bout à bout les lignes des feuilles.
+
+    Les colonnes de même nom (à la casse, aux accents et aux espaces près) sont réunies sous la
+    même écriture : la première rencontrée. `label_rows` ajoute la feuille et la ligne d'origine."""
+    canonical: dict[str, str] = {}
+    for sheet in sheets:
+        for header in sheet.headers:
+            canonical.setdefault(normalize_name(header), header)
+    combined: list[dict] = []
+    for sheet in sheets:
+        rename = {h: canonical[normalize_name(h)] for h in sheet.headers}
+        for row, number in zip(sheet.rows, sheet.numbers):
+            merged = {rename.get(k, k): v for k, v in row.items()}
+            if label_rows:
+                merged["Feuille"] = sheet.name
+                merged["Ligne feuille"] = number
+            combined.append(merged)
+    return combined
+
+
+def sheet_problems(sheets: list[Sheet], mapping: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Colonnes choisies absentes de certaines feuilles : (erreurs bloquantes, avertissements)."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    for sheet in sheets:
+        present = {normalize_name(h) for h in sheet.headers}
+        for field, column in mapping.items():
+            if normalize_name(column) in present:
+                continue
+            message = f"« {sheet.name} » : colonne « {column} » introuvable"
+            (errors if field in ("nom", "prenom") else warnings).append(message)
+    return errors, warnings

@@ -122,7 +122,10 @@ class ReviewWindow(ctk.CTkToplevel):
             text=f"Paire {self.index + 1} / {len(self.pairs)} · score {res.score:.0%}{tag}"
         )
         for (title, labels), rec, other in ((self.cards[0], a, b), (self.cards[1], b, a)):
-            title.configure(text=rec.extra.get("_label") or f"Ligne {rec.row} du fichier")
+            label = rec.extra.get("_label")
+            if not label and rec.raw.get("Feuille"):
+                label = f"Feuille « {rec.raw['Feuille']} », ligne {rec.raw.get('Ligne feuille', rec.row)}"
+            title.configure(text=label or f"Ligne {rec.row} du fichier")
             for key, _ in FIELDS:
                 labels[key].configure(
                     text=self._raw(rec, key),

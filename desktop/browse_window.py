@@ -150,7 +150,7 @@ class BrowseWindow(ctk.CTkToplevel):
         )
         self.history_btn.pack(side="right", padx=(0, 8))
 
-        entry.focus()
+        # --- entry.focus()
         self._apply()
 
     # --- Construction

@@ -49,7 +49,7 @@ def export_workbook(
     pending: list[tuple[int, int, MatchResult]],
     mapping: dict[str, str],
 ) -> None:
-    headers = list(records[0].raw.keys()) if records else []
+    headers = list(dict.fromkeys(k for r in records for k in r.raw))
     wb = Workbook(write_only=True)
 
     # --- inscriptions : toutes les lignes, toutes les colonnes d'origine, intactes
