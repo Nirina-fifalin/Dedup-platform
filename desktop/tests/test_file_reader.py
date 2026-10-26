@@ -72,3 +72,19 @@ def test_csv_is_a_single_sheet(tmp_path):
     sheets = file_reader.read_workbook(path)
     assert len(sheets) == 1
     assert sheets[0].rows == [{"Nom": "Rakoto", "Prénom": "Jean"}]
+
+
+def test_duplicate_column_titles_are_kept_apart(tmp_path):
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "Learners"
+    ws.append(["Name", "Place", "Training", "Place"])
+    ws.append(["Rakoto", "Coding School", "Excel", "Fianarantsoa"])
+    path = tmp_path / "dup.xlsx"
+    wb.save(path)
+
+    sheet = file_reader.read_workbook(path)[0]
+    assert sheet.headers == ["Name", "Place", "Training", "Place (2)"]
+    assert sheet.rows[0]["Place"] == "Coding School"          # la 1re colonne n'est plus écrasée
+    assert sheet.rows[0]["Place (2)"] == "Fianarantsoa"

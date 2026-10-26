@@ -143,6 +143,34 @@ class Sheet:
     numbers: list[int]          # numéro de ligne dans la feuille Excel, pour chaque ligne de données
 
 
+def _unique_headers(values) -> list[str]:
+    """Noms de colonnes uniques : « Place », « Place (2) », « Place (3) » ; sans titre : « Colonne N »."""
+    seen: dict[str, int] = {}
+    headers: list[str] = []
+    for position, value in enumerate(values, start=1):
+        name = str(value).strip() if value is not None else ""
+        if not name:
+            name = f"Colonne {position}"
+        count = seen.get(name, 0) + 1
+        seen[name] = count
+        headers.append(name if count == 1 else f"{name} ({count})")
+    return headers
+
+
+def _drop_unused_columns(headers: list[str], rows: list[dict]) -> tuple[list[str], list[dict]]:
+    """Retire les colonnes sans titre qui ne contiennent aucune donnée."""
+    unused = {
+        h for h in headers
+        if h.startswith("Colonne ") and not any(r.get(h) not in (None, "") for r in rows)
+    }
+    if not unused:
+        return headers, rows
+    return (
+        [h for h in headers if h not in unused],
+        [{k: v for k, v in r.items() if k not in unused} for r in rows],
+    )
+
+
 def _read_xlsx_sheets(path: Path) -> list[Sheet]:
     from openpyxl import load_workbook
 
@@ -158,12 +186,13 @@ def _read_xlsx_sheets(path: Path) -> list[Sheet]:
             for number, values in enumerate(ws.iter_rows(values_only=True), start=1):
                 if not headers:
                     if any(v is not None and str(v).strip() for v in values):
-                        headers = [str(v).strip() if v is not None else "" for v in values]
+                        headers = _unique_headers(values)
                     continue
                 if any(v is not None for v in values):
                     rows.append(dict(zip(headers, values)))
                     numbers.append(number)
             if rows:
+                headers, rows = _drop_unused_columns(headers, rows)
                 sheets.append(Sheet(ws.title, headers, rows, numbers))
         return sheets
     finally:
@@ -176,10 +205,20 @@ def read_workbook(path: str | Path) -> list[Sheet]:
     suffix = path.suffix.lower()
     if suffix == ".csv":
         text = _read_csv_text(path)
-        rows = list(csv.DictReader(text.splitlines(), delimiter=_delimiter(text)))
+        table = list(csv.reader(text.splitlines(), delimiter=_delimiter(text)))
+        if len(table) < 2:
+            return []
+        headers = _unique_headers(table[0])
+        rows: list[dict] = []
+        numbers: list[int] = []
+        for number, line in enumerate(table[1:], start=2):
+            if any(cell.strip() for cell in line):
+                rows.append(dict(zip(headers, line)))
+                numbers.append(number)
         if not rows:
             return []
-        return [Sheet(path.stem, list(rows[0].keys()), rows, list(range(2, len(rows) + 2)))]
+        headers, rows = _drop_unused_columns(headers, rows)
+        return [Sheet(path.stem, headers, rows, numbers)]
     if suffix == ".xlsx":
         return _read_xlsx_sheets(path)
     raise ValueError(f"Format non supporté : {suffix} (utiliser .csv ou .xlsx)")
